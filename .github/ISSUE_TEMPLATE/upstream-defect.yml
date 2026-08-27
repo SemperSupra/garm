@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Maintainer/upstreaming queue only. External submissions are automatically redirected and closed.**
+        **Maintainer/upstreaming queue only. Issue creation is restricted to repository collaborators.**
         Use this only when the issue affects the SemperSupra GARM fork itself.
         Search cloudbase/garm first. Do not duplicate an existing upstream issue; link it instead.
         Do not put credentials, tokens, private infrastructure details, or security-sensitive exploit details in a public issue.
