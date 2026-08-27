@@ -1,0 +1,66 @@
+name: Upstream-bound defect
+description: Maintainer-only upstreaming tracker for a GARM defect this fork is actively carrying toward cloudbase/garm.
+title: "[upstream] "
+labels:
+  - fork:upstream-bound
+  - type:bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Maintainer/upstreaming queue only. Issue creation is restricted to repository collaborators.**
+        Use this only when the issue affects the SemperSupra GARM fork itself.
+        Search cloudbase/garm first. Do not duplicate an existing upstream issue; link it instead.
+        Do not put credentials, tokens, private infrastructure details, or security-sensitive exploit details in a public issue.
+  - type: input
+    id: affected_sha
+    attributes:
+      label: Affected SemperSupra/garm SHA
+      description: Exact 40-character commit SHA when known.
+      placeholder: 0123456789abcdef0123456789abcdef01234567
+    validations:
+      required: true
+  - type: dropdown
+    id: upstream_status
+    attributes:
+      label: Upstream status
+      options:
+        - Existing upstream issue/PR
+        - Needs upstream report
+        - Upstream declined / downstream decision needed
+    validations:
+      required: true
+  - type: input
+    id: upstream_link
+    attributes:
+      label: Upstream issue or PR
+      description: Link cloudbase/garm issue/PR if one already exists; otherwise write "none yet".
+      placeholder: https://github.com/cloudbase/garm/issues/123
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong, and why does it matter to the fork?
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal reproducer / evidence
+      description: Include the smallest public-safe reproducer, logs, or test evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Proposed downstream patch
+      description: Describe the smallest upstream-oriented patch, if known.
+  - type: textarea
+    id: exit
+    attributes:
+      label: Exit condition
+      description: Define when the fork issue can close (for example upstream merge + fork sync + regression PASS).
+    validations:
+      required: true

@@ -1,0 +1,40 @@
+name: Intentional downstream delta
+description: Maintainer-only tracker for the rare temporary fork delta that cannot yet be upstreamed.
+title: "[downstream] "
+labels:
+  - fork:downstream-only
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Maintainer/upstreaming queue only. Issue creation is restricted to repository collaborators.**
+        Downstream deltas should be rare. Prefer upstream-compatible configuration or an upstream patch when practical.
+        TrueNAS-provider and appliance-specific work belongs in their owning repositories, not here.
+  - type: input
+    id: base
+    attributes:
+      label: Upstream/base identity
+      description: Upstream tag/SHA or SemperSupra base SHA this delta is built on.
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why must this live in the fork?
+      description: Explain why configuration, an extension point, or an upstream change is not sufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and rebase risk
+      description: What upstream areas does this touch and what must be revalidated when syncing?
+    validations:
+      required: true
+  - type: textarea
+    id: exit
+    attributes:
+      label: Exit / retirement condition
+      description: State how this delta is eventually removed, upstreamed, or deliberately retained.
+    validations:
+      required: true

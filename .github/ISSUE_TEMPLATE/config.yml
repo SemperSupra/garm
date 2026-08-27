@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Upstream GARM — external reports belong upstream
+    url: https://github.com/cloudbase/garm
+    about: This fork does not track externally submitted issues. Use upstream Issues if GitHub permits issue creation; otherwise use the upstream community channel documented in its README.
+  - name: TrueNAS external-provider issues
+    url: https://github.com/SemperSupra/garm-provider-truenas/issues
+    about: TrueNAS Apps/Containers/VM provider implementation and runtime behavior belongs here.
+  - name: GARM TrueNAS appliance / Foundry issues
+    url: https://github.com/SemperSupra/truenas-app-foundry/issues
+    about: Appliance assembly, GHCR image, source qualification, and TrueNAS App packaging belongs here.

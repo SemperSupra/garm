@@ -1,0 +1,40 @@
+name: Qualification / promotion blocker
+description: Maintainer-only qualification for an exact GARM candidate or upstreaming blocker.
+title: "[qualification] "
+labels:
+  - fork:qualification
+body:
+  - type: input
+    id: candidate
+    attributes:
+      label: Exact candidate SHA
+      placeholder: 0123456789abcdef0123456789abcdef01234567
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Qualification scope
+      description: State exactly what behavior or patch is under qualification.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Required evidence
+      description: Tests, public CI runs, build artifacts, red/green regression proof, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: nonclaims
+    attributes:
+      label: Explicit non-claims
+      description: State what this qualification does NOT prove (for example TrueNAS HIL, provider functionality, or production readiness).
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance / promotion criteria
+    validations:
+      required: true
