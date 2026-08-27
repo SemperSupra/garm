@@ -265,7 +265,7 @@ func (e *external) ListInstances(ctx context.Context, poolID string, listInstanc
 	).Inc()
 
 	out, err := e.execWithTimeout(ctx, nil, asEnv)
-	if err == nil {
+	if err != nil {
 		metrics.InstanceOperationFailedCount.WithLabelValues(
 			"ListInstances", // label: operation
 			e.cfg.Name,      // label: provider
