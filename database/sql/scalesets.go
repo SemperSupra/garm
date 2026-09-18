@@ -81,6 +81,7 @@ func (s *sqlDatabase) CreateEntityScaleSet(ctx context.Context, entity params.Fo
 		RunnerPrefix:           param.GetRunnerPrefix(),
 		MaxRunners:             param.MaxRunners,
 		MinIdleRunners:         param.MinIdleRunners,
+		MaxCreateAttempts:      param.MaxCreateAttempts,
 		RunnerBootstrapTimeout: param.RunnerBootstrapTimeout,
 		Image:                  param.Image,
 		Flavor:                 param.Flavor,
@@ -315,9 +316,13 @@ func (s *sqlDatabase) getEntityScaleSet(tx *gorm.DB, entityType params.ForgeEnti
 func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param params.UpdateScaleSetParams) (params.ScaleSet, int64, error) {
 	updates := make(map[string]interface{})
 	incrementGeneration := false
+	resetCreateFailures := false
 
 	if param.Enabled != nil && scaleSet.Enabled != *param.Enabled {
 		updates["enabled"] = *param.Enabled
+		if *param.Enabled {
+			resetCreateFailures = true
+		}
 	}
 
 	if param.State != nil && *param.State != scaleSet.State {
@@ -391,6 +396,11 @@ func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param param
 		updates["min_idle_runners"] = *param.MinIdleRunners
 	}
 
+	if param.MaxCreateAttempts != nil && *param.MaxCreateAttempts != scaleSet.MaxCreateAttempts {
+		updates["max_create_attempts"] = *param.MaxCreateAttempts
+		resetCreateFailures = true
+	}
+
 	if param.OSArch != "" && param.OSArch != scaleSet.OSArch {
 		updates["os_arch"] = param.OSArch
 		incrementGeneration = true
@@ -412,6 +422,10 @@ func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param param
 
 	if incrementGeneration {
 		updates["generation"] = scaleSet.Generation + 1
+		resetCreateFailures = true
+	}
+	if resetCreateFailures && scaleSet.CreateFailures != 0 {
+		updates["create_failures"] = 0
 	}
 
 	var rowsAffected int64
@@ -558,6 +572,82 @@ func (s *sqlDatabase) SetScaleSetDesiredRunnerCount(_ context.Context, scaleSetI
 		return nil
 	}); err != nil {
 		return fmt.Errorf("error setting desired runner count: %w", err)
+	}
+	return nil
+}
+
+
+// IncrementScaleSetCreateFailures records one failed provider materialization
+// attempt. The update is serialized with a row lock so concurrent scale-set
+// instance managers cannot lose increments.
+func (s *sqlDatabase) IncrementScaleSetCreateFailures(_ context.Context, scaleSetID uint) (err error) {
+	var scaleSet params.ScaleSet
+	var rowsAffected int64
+	defer func() {
+		if err == nil && scaleSet.ID != 0 && rowsAffected > 0 {
+			s.sendNotify(common.ScaleSetEntityType, common.UpdateOperation, scaleSet)
+		}
+	}()
+	if err := s.conn.Transaction(func(tx *gorm.DB) error {
+		dbSet, err := s.getScaleSetByID(tx.Clauses(clause.Locking{Strength: "UPDATE"}), scaleSetID, "Instances", "Enterprise", "Organization", "Repository")
+		if err != nil {
+			return fmt.Errorf("error fetching scale set: %w", err)
+		}
+		result := tx.Model(&dbSet).UpdateColumn("create_failures", dbSet.CreateFailures+1)
+		if result.Error != nil {
+			return fmt.Errorf("error incrementing scale set create failures: %w", result.Error)
+		}
+		rowsAffected = result.RowsAffected
+		dbSet, err = s.getScaleSetByID(tx, scaleSetID, "Instances", "Enterprise", "Organization", "Repository")
+		if err != nil {
+			return fmt.Errorf("error reloading scale set: %w", err)
+		}
+		scaleSet, err = s.sqlToCommonScaleSet(dbSet)
+		if err != nil {
+			return fmt.Errorf("error converting scale set: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("error recording scale set create failure: %w", err)
+	}
+	return nil
+}
+
+// ResetScaleSetCreateFailures closes the materialization circuit after a
+// successful provider create. It is a no-op when the counter is already zero.
+func (s *sqlDatabase) ResetScaleSetCreateFailures(_ context.Context, scaleSetID uint) (err error) {
+	var scaleSet params.ScaleSet
+	var rowsAffected int64
+	defer func() {
+		if err == nil && scaleSet.ID != 0 && rowsAffected > 0 {
+			s.sendNotify(common.ScaleSetEntityType, common.UpdateOperation, scaleSet)
+		}
+	}()
+	if err := s.conn.Transaction(func(tx *gorm.DB) error {
+		dbSet, err := s.getScaleSetByID(tx.Clauses(clause.Locking{Strength: "UPDATE"}), scaleSetID, "Instances", "Enterprise", "Organization", "Repository")
+		if err != nil {
+			return fmt.Errorf("error fetching scale set: %w", err)
+		}
+		if dbSet.CreateFailures == 0 {
+			scaleSet, err = s.sqlToCommonScaleSet(dbSet)
+			return err
+		}
+		result := tx.Model(&dbSet).UpdateColumn("create_failures", 0)
+		if result.Error != nil {
+			return fmt.Errorf("error resetting scale set create failures: %w", result.Error)
+		}
+		rowsAffected = result.RowsAffected
+		dbSet, err = s.getScaleSetByID(tx, scaleSetID, "Instances", "Enterprise", "Organization", "Repository")
+		if err != nil {
+			return fmt.Errorf("error reloading scale set: %w", err)
+		}
+		scaleSet, err = s.sqlToCommonScaleSet(dbSet)
+		if err != nil {
+			return fmt.Errorf("error converting scale set: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("error resetting scale set create failures: %w", err)
 	}
 	return nil
 }
