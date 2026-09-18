@@ -28,7 +28,6 @@ type providerHelper interface {
 	GetControllerInfo() (params.ControllerInfo, error)
 	GetGithubEntity(entity params.ForgeEntity) (params.ForgeEntity, error)
 	RecordScaleSetCreateFailure(scaleSetID uint) error
-	ResetScaleSetCreateFailures(scaleSetID uint) error
 }
 
 func (p *Provider) updateArgsFromProviderInstance(instanceName string, providerInstance commonParams.ProviderInstance) (params.Instance, error) {
@@ -94,13 +93,6 @@ func (p *Provider) GetGithubEntity(entity params.ForgeEntity) (params.ForgeEntit
 func (p *Provider) RecordScaleSetCreateFailure(scaleSetID uint) error {
 	if err := p.store.IncrementScaleSetCreateFailures(p.ctx, scaleSetID); err != nil {
 		return fmt.Errorf("recording scale set create failure: %w", err)
-	}
-	return nil
-}
-
-func (p *Provider) ResetScaleSetCreateFailures(scaleSetID uint) error {
-	if err := p.store.ResetScaleSetCreateFailures(p.ctx, scaleSetID); err != nil {
-		return fmt.Errorf("resetting scale set create failures: %w", err)
 	}
 	return nil
 }
