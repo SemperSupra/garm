@@ -73,3 +73,41 @@ func TestMaterializationFailedBeforeActive(t *testing.T) {
 		}
 	}
 }
+
+
+func TestHandleJobsStartedResetsMaterializationFailures(t *testing.T) {
+	store := dbMocks.NewStore(t)
+	ctx := context.Background()
+	scaleSet := params.ScaleSet{
+		ID:     1,
+		RepoID: "11111111-1111-1111-1111-111111111111",
+	}
+
+	store.On("CreateOrUpdateJob", mock.Anything, mock.AnythingOfType("params.Job")).
+		Return(params.Job{}, nil).
+		Once()
+	store.On("UpdateInstance", mock.Anything, "runner-1", mock.MatchedBy(func(update params.UpdateInstanceParams) bool {
+		return update.RunnerStatus == params.RunnerActive
+	})).
+		Return(params.Instance{Name: "runner-1", RunnerStatus: params.RunnerActive}, nil).
+		Once()
+	store.On("ResetScaleSetCreateFailures", mock.Anything, uint(1)).
+		Return(nil).
+		Once()
+
+	worker := &Worker{
+		ctx:        ctx,
+		consumerID: "test-scaleset-budget",
+		store:      store,
+		scaleSet:   scaleSet,
+	}
+
+	err := worker.HandleJobsStarted([]params.ScaleSetJobMessage{{
+		MessageType: params.MessageTypeJobStarted,
+		JobID:       "job-1",
+		RunnerName:  "runner-1",
+	}})
+	if err != nil {
+		t.Fatalf("HandleJobsStarted returned error: %v", err)
+	}
+}
