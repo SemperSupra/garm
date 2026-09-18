@@ -219,6 +219,8 @@ type ScaleSet struct {
 	Enabled                bool
 	LastMessageID          int64
 	DesiredRunnerCount     int
+	MaxCreateAttempts      uint
+	CreateFailures         uint
 	// ExtraSpecs is an opaque json that gets sent to the provider
 	// as part of the bootstrap params for instances. It can contain
 	// any kind of data needed by providers.
