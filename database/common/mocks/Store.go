@@ -6692,6 +6692,30 @@ func (_c *Store_UpdateUser_Call) RunAndReturn(run func(context.Context, string, 
 	return _c
 }
 
+// IncrementScaleSetCreateFailures provides a mock function with given fields: ctx, scaleSetID
+func (_m *Store) IncrementScaleSetCreateFailures(ctx context.Context, scaleSetID uint) error {
+	ret := _m.Called(ctx, scaleSetID)
+	if len(ret) == 0 {
+		panic("no return value specified for IncrementScaleSetCreateFailures")
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, uint) error); ok {
+		return rf(ctx, scaleSetID)
+	}
+	return ret.Error(0)
+}
+
+// ResetScaleSetCreateFailures provides a mock function with given fields: ctx, scaleSetID
+func (_m *Store) ResetScaleSetCreateFailures(ctx context.Context, scaleSetID uint) error {
+	ret := _m.Called(ctx, scaleSetID)
+	if len(ret) == 0 {
+		panic("no return value specified for ResetScaleSetCreateFailures")
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, uint) error); ok {
+		return rf(ctx, scaleSetID)
+	}
+	return ret.Error(0)
+}
+
 // NewStore creates a new instance of Store. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewStore(t interface {
