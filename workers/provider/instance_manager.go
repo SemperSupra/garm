@@ -159,10 +159,6 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 			if recordErr := i.helper.RecordScaleSetCreateFailure(i.scaleSet.ID); recordErr != nil {
 				slog.ErrorContext(i.ctx, "recording scale set create failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
 			}
-			return
-		}
-		if resetErr := i.helper.ResetScaleSetCreateFailures(i.scaleSet.ID); resetErr != nil {
-			slog.ErrorContext(i.ctx, "resetting scale set create failures", "error", resetErr, "scale_set_id", i.scaleSet.ID)
 		}
 	}()
 	entity, err := i.getEntity()
