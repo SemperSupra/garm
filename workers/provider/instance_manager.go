@@ -274,7 +274,7 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 
 	if providerInstance.Status == commonParams.InstanceError {
 		materializationFailed = true
-		instanceIDToDelete = providerInstance.ProviderID
+		instanceIDToDelete = instance.ProviderID
 		if instanceIDToDelete == "" {
 			instanceIDToDelete = instance.Name
 		}
