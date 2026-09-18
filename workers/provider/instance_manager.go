@@ -157,7 +157,7 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 	defer func() {
 		if err != nil || materializationFailed {
 			if recordErr := i.helper.RecordScaleSetCreateFailure(i.scaleSet.ID); recordErr != nil {
-				slog.ErrorContext(i.ctx, "recording scale set create failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
+				slog.ErrorContext(i.ctx, "recording scale set materialization failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
 			}
 		}
 	}()
