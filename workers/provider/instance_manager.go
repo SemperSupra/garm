@@ -257,13 +257,23 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 	providerInstance, err := i.provider.CreateInstance(createCtx, bootstrapArgs, createInstanceParams)
 	if err != nil {
 		instanceIDToDelete = instance.Name
+		if recordErr := i.helper.RecordScaleSetCreateFailure(i.scaleSet.ID); recordErr != nil {
+			slog.ErrorContext(i.ctx, "recording scale set create failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
+		}
 		return fmt.Errorf("creating instance in provider: %w", err)
 	}
 
 	if providerInstance.Status == commonParams.InstanceError {
-		instanceIDToDelete = instance.ProviderID
+		instanceIDToDelete = providerInstance.ProviderID
 		if instanceIDToDelete == "" {
 			instanceIDToDelete = instance.Name
+		}
+		if recordErr := i.helper.RecordScaleSetCreateFailure(i.scaleSet.ID); recordErr != nil {
+			slog.ErrorContext(i.ctx, "recording scale set create failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
+		}
+	} else {
+		if resetErr := i.helper.ResetScaleSetCreateFailures(i.scaleSet.ID); resetErr != nil {
+			slog.ErrorContext(i.ctx, "resetting scale set create failures", "error", resetErr, "scale_set_id", i.scaleSet.ID)
 		}
 	}
 
