@@ -849,8 +849,29 @@ Loop:
 }
 
 func (w *Worker) handleScaleUp() {
+	// Re-read the authoritative row before every scale-up. Instance and scale-set
+	// watcher events are processed concurrently, so relying only on the local
+	// watcher cache could race a provider failure update and create one more
+	// replacement after the circuit should have opened.
+	latestScaleSet, err := w.store.GetScaleSetByID(w.ctx, w.scaleSet.ID)
+	if err != nil {
+		slog.ErrorContext(w.ctx, "error refreshing scale set create circuit state", "error", err)
+		return
+	}
+	w.scaleSet = latestScaleSet
+
 	if !w.scaleSet.Enabled {
 		slog.DebugContext(w.ctx, "scale set is disabled; not scaling up")
+		return
+	}
+
+	if w.scaleSet.CreateCircuitOpen() {
+		slog.WarnContext(
+			w.ctx,
+			"scale set materialization circuit is open; not scaling up",
+			"create_failures", w.scaleSet.CreateFailures,
+			"max_create_attempts", w.scaleSet.CreateAttemptLimit(),
+		)
 		return
 	}
 
