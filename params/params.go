@@ -719,7 +719,15 @@ type ScaleSet struct {
 	Enabled            bool                `json:"enabled,omitempty"`
 	Instances          []Instance          `json:"instances,omitempty"`
 	DesiredRunnerCount int                 `json:"desired_runner_count,omitempty"`
-	EnableShell        bool                `json:"enable_shell"`
+	// MaxCreateAttempts is the maximum number of consecutive provider create
+	// failures tolerated before this scale set stops creating replacement
+	// runners. Zero uses the application default.
+	MaxCreateAttempts uint `json:"max_create_attempts,omitempty"`
+	// CreateFailures is the persisted count of consecutive provider create
+	// failures. A successful provider create or an intentional scale set
+	// remediation resets this value.
+	CreateFailures uint `json:"create_failures,omitempty"`
+	EnableShell    bool `json:"enable_shell"`
 
 	// Generation holds the numeric generation of the scaleset. This number
 	// will be incremented, every time certain settings of the scaleset, which
@@ -796,6 +804,21 @@ func (p ScaleSet) BelongsTo(entity ForgeEntity) bool {
 
 func (p ScaleSet) GetID() uint {
 	return p.ID
+}
+
+// CreateAttemptLimit returns the effective consecutive provider-create
+// failure ceiling for this scale set.
+func (p ScaleSet) CreateAttemptLimit() uint {
+	if p.MaxCreateAttempts == 0 {
+		return appdefaults.DefaultScaleSetMaxCreateAttempts
+	}
+	return p.MaxCreateAttempts
+}
+
+// CreateCircuitOpen reports whether provider materialization is blocked until
+// a successful remediation/reset changes the persisted failure state.
+func (p ScaleSet) CreateCircuitOpen() bool {
+	return p.CreateFailures >= p.CreateAttemptLimit()
 }
 
 func (p ScaleSet) GetEntity() (ForgeEntity, error) {
