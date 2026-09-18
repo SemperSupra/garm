@@ -6695,25 +6695,95 @@ func (_c *Store_UpdateUser_Call) RunAndReturn(run func(context.Context, string, 
 // IncrementScaleSetCreateFailures provides a mock function with given fields: ctx, scaleSetID
 func (_m *Store) IncrementScaleSetCreateFailures(ctx context.Context, scaleSetID uint) error {
 	ret := _m.Called(ctx, scaleSetID)
+
 	if len(ret) == 0 {
 		panic("no return value specified for IncrementScaleSetCreateFailures")
 	}
+
+	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, uint) error); ok {
-		return rf(ctx, scaleSetID)
+		r0 = rf(ctx, scaleSetID)
+	} else {
+		r0 = ret.Error(0)
 	}
-	return ret.Error(0)
+
+	return r0
+}
+
+// Store_IncrementScaleSetCreateFailures_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IncrementScaleSetCreateFailures'
+type Store_IncrementScaleSetCreateFailures_Call struct {
+	*mock.Call
+}
+
+// IncrementScaleSetCreateFailures is a helper method to define mock.On call
+//   - ctx context.Context
+//   - scaleSetID uint
+func (_e *Store_Expecter) IncrementScaleSetCreateFailures(ctx interface{}, scaleSetID interface{}) *Store_IncrementScaleSetCreateFailures_Call {
+	return &Store_IncrementScaleSetCreateFailures_Call{Call: _e.mock.On("IncrementScaleSetCreateFailures", ctx, scaleSetID)}
+}
+
+func (_c *Store_IncrementScaleSetCreateFailures_Call) Run(run func(ctx context.Context, scaleSetID uint)) *Store_IncrementScaleSetCreateFailures_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(uint))
+	})
+	return _c
+}
+
+func (_c *Store_IncrementScaleSetCreateFailures_Call) Return(_a0 error) *Store_IncrementScaleSetCreateFailures_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Store_IncrementScaleSetCreateFailures_Call) RunAndReturn(run func(context.Context, uint) error) *Store_IncrementScaleSetCreateFailures_Call {
+	_c.Call.Return(run)
+	return _c
 }
 
 // ResetScaleSetCreateFailures provides a mock function with given fields: ctx, scaleSetID
 func (_m *Store) ResetScaleSetCreateFailures(ctx context.Context, scaleSetID uint) error {
 	ret := _m.Called(ctx, scaleSetID)
+
 	if len(ret) == 0 {
 		panic("no return value specified for ResetScaleSetCreateFailures")
 	}
+
+	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, uint) error); ok {
-		return rf(ctx, scaleSetID)
+		r0 = rf(ctx, scaleSetID)
+	} else {
+		r0 = ret.Error(0)
 	}
-	return ret.Error(0)
+
+	return r0
+}
+
+// Store_ResetScaleSetCreateFailures_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ResetScaleSetCreateFailures'
+type Store_ResetScaleSetCreateFailures_Call struct {
+	*mock.Call
+}
+
+// ResetScaleSetCreateFailures is a helper method to define mock.On call
+//   - ctx context.Context
+//   - scaleSetID uint
+func (_e *Store_Expecter) ResetScaleSetCreateFailures(ctx interface{}, scaleSetID interface{}) *Store_ResetScaleSetCreateFailures_Call {
+	return &Store_ResetScaleSetCreateFailures_Call{Call: _e.mock.On("ResetScaleSetCreateFailures", ctx, scaleSetID)}
+}
+
+func (_c *Store_ResetScaleSetCreateFailures_Call) Run(run func(ctx context.Context, scaleSetID uint)) *Store_ResetScaleSetCreateFailures_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(uint))
+	})
+	return _c
+}
+
+func (_c *Store_ResetScaleSetCreateFailures_Call) Return(_a0 error) *Store_ResetScaleSetCreateFailures_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Store_ResetScaleSetCreateFailures_Call) RunAndReturn(run func(context.Context, uint) error) *Store_ResetScaleSetCreateFailures_Call {
+	_c.Call.Return(run)
+	return _c
 }
 
 // NewStore creates a new instance of Store. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
