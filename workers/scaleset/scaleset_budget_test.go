@@ -59,3 +59,17 @@ func TestHandleScaleUpStopsAtAuthoritativeOpenCreateCircuit(t *testing.T) {
 		t.Fatal("worker did not retain authoritative open-circuit state")
 	}
 }
+
+
+func TestMaterializationFailedBeforeActive(t *testing.T) {
+	for _, status := range []params.RunnerStatus{params.RunnerPending, params.RunnerInstalling, params.RunnerFailed} {
+		if !materializationFailedBeforeActive(params.Instance{RunnerStatus: status}) {
+			t.Fatalf("expected status %q to count as pre-active materialization failure", status)
+		}
+	}
+	for _, status := range []params.RunnerStatus{params.RunnerActive, params.RunnerIdle, params.RunnerTerminated} {
+		if materializationFailedBeforeActive(params.Instance{RunnerStatus: status}) {
+			t.Fatalf("did not expect status %q to count as pre-active materialization failure", status)
+		}
+	}
+}
