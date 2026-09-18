@@ -35,6 +35,11 @@ const (
 	// DefaultPoolQueueSize is the default size for a pool queue.
 	DefaultPoolQueueSize = 10
 
+	// DefaultScaleSetMaxCreateAttempts is the number of consecutive failed
+	// provider create calls a scale set will tolerate before its materialization
+	// circuit opens. A successful create resets the failure counter.
+	DefaultScaleSetMaxCreateAttempts uint = 5
+
 	// GithubDefaultBaseURL is the default URL for the github API.
 	GithubDefaultBaseURL = "https://api.github.com/"
 
