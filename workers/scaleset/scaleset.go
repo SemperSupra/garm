@@ -380,6 +380,25 @@ func (w *Worker) removeRunnerFromGithubAndSetPendingDelete(runnerName string, ag
 	return nil
 }
 
+func materializationFailedBeforeActive(runner params.Instance) bool {
+	switch runner.RunnerStatus {
+	case params.RunnerPending, params.RunnerInstalling, params.RunnerFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *Worker) recordMaterializationFailure(runner params.Instance, reason string) {
+	if !materializationFailedBeforeActive(runner) {
+		return
+	}
+	if err := w.store.IncrementScaleSetCreateFailures(w.ctx, w.scaleSet.ID); err != nil {
+		slog.ErrorContext(w.ctx, "recording scale set materialization failure",
+			"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name, "reason", reason, "error", err)
+	}
+}
+
 func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) (func(), error) {
 	lockNames := []string{}
 
@@ -434,6 +453,7 @@ func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) 
 				locking.Unlock(runner.Name, false)
 				continue
 			}
+			w.recordMaterializationFailure(runner, "runner timed out or failed before job start")
 			lockNames = append(lockNames, runner.Name)
 		}
 	}
@@ -540,6 +560,7 @@ func (w *Worker) consolidateRunnerState(runners []params.RunnerReference) error 
 			// which involves this runner. For the duration of the lifetime of this function, we
 			// hold the lock, so no race condition can occur.
 			w.runners[runner.ID] = instance
+			w.recordMaterializationFailure(runner, "runner disappeared from GitHub before job start")
 		}
 	}
 
@@ -630,6 +651,7 @@ func (w *Worker) consolidateProviderState() error {
 				locking.Unlock(runner.Name, false)
 				continue
 			}
+			w.recordMaterializationFailure(runner, "runner disappeared from provider before job start")
 		}
 		locking.Unlock(runner.Name, false)
 	}
