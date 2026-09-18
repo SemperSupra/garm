@@ -723,9 +723,9 @@ type ScaleSet struct {
 	// failures tolerated before this scale set stops creating replacement
 	// runners. Zero uses the application default.
 	MaxCreateAttempts uint `json:"max_create_attempts,omitempty"`
-	// CreateFailures is the persisted count of consecutive provider create
-	// failures. A successful provider create or an intentional scale set
-	// remediation resets this value.
+	// CreateFailures is the persisted count of consecutive materializations
+	// that fail before a runner starts a job. JobStarted or an intentional
+	// scale set remediation resets this value.
 	CreateFailures uint `json:"create_failures,omitempty"`
 	EnableShell    bool `json:"enable_shell"`
 
