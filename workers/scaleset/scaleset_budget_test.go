@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	dbMocks "github.com/cloudbase/garm/database/common/mocks"
+	"github.com/cloudbase/garm/locking"
 	"github.com/cloudbase/garm/params"
 )
 
@@ -78,6 +79,14 @@ func TestMaterializationFailedBeforeActive(t *testing.T) {
 func TestHandleJobsStartedResetsMaterializationFailures(t *testing.T) {
 	store := dbMocks.NewStore(t)
 	ctx := context.Background()
+	locker, err := locking.NewLocalLocker(ctx, store)
+	if err != nil {
+		t.Fatalf("creating local locker: %v", err)
+	}
+	if err := locking.RegisterLocker(locker); err != nil {
+		t.Fatalf("registering local locker: %v", err)
+	}
+
 	scaleSet := params.ScaleSet{
 		ID:     1,
 		RepoID: "11111111-1111-1111-1111-111111111111",
