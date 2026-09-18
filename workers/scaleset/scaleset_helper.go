@@ -212,6 +212,12 @@ func (w *Worker) HandleJobsStarted(jobs []params.ScaleSetJobMessage) (err error)
 			return fmt.Errorf("updating runner %s: %w", job.RunnerName, err)
 		}
 		locking.Unlock(job.RunnerName, false)
+		if err := w.store.ResetScaleSetCreateFailures(w.ctx, w.scaleSet.ID); err != nil {
+			// A stale nonzero counter fails closed by preventing later replacement
+			// materializations. Do not disturb a job that has already started.
+			slog.ErrorContext(w.ctx, "resetting scale set materialization failures after job start",
+				"scale_set_id", w.scaleSet.ID, "runner_name", job.RunnerName, "error", err)
+		}
 	}
 	return nil
 }
