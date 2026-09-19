@@ -31,12 +31,14 @@ import (
 	apiClientScaleSets "github.com/cloudbase/garm/client/scalesets"
 	"github.com/cloudbase/garm/cmd/garm-cli/common"
 	"github.com/cloudbase/garm/params"
+	"github.com/cloudbase/garm/util/appdefaults"
 )
 
 var (
 	scalesetProvider               string
 	scalesetMaxRunners             uint
 	scalesetMinIdleRunners         uint
+	scalesetMaxCreateAttempts      uint
 	scalesetRunnerPrefix           string
 	scalesetName                   string
 	scalesetImage                  string
@@ -228,6 +230,7 @@ var scaleSetAddCmd = &cobra.Command{
 			Name:                   scalesetName,
 			MaxRunners:             scalesetMaxRunners,
 			MinIdleRunners:         scalesetMinIdleRunners,
+			MaxCreateAttempts:      scalesetMaxCreateAttempts,
 			Image:                  scalesetImage,
 			Flavor:                 scalesetFlavor,
 			OSType:                 commonParams.OSType(scalesetOSType),
@@ -395,6 +398,10 @@ explicitly remove them using the runner delete command.
 			scaleSetUpdateParams.MinIdleRunners = &scalesetMinIdleRunners
 		}
 
+		if cmd.Flags().Changed("max-create-attempts") {
+			scaleSetUpdateParams.MaxCreateAttempts = &scalesetMaxCreateAttempts
+		}
+
 		if cmd.Flags().Changed("runner-prefix") {
 			scaleSetUpdateParams.RunnerPrefix = params.RunnerPrefix{
 				Prefix: scalesetRunnerPrefix,
@@ -555,6 +562,7 @@ func init() {
 	scaleSetUpdateCmd.Flags().StringVar(&scalesetRunnerPrefix, "runner-prefix", "", "The name prefix to use for runners in this scale set.")
 	scaleSetUpdateCmd.Flags().UintVar(&scalesetMaxRunners, "max-runners", 5, "The maximum number of runner this scale set will create.")
 	scaleSetUpdateCmd.Flags().UintVar(&scalesetMinIdleRunners, "min-idle-runners", 1, "Attempt to maintain a minimum of idle self-hosted runners of this type.")
+	scaleSetUpdateCmd.Flags().UintVar(&scalesetMaxCreateAttempts, "max-create-attempts", appdefaults.DefaultScaleSetMaxCreateAttempts, "Maximum consecutive provider create failures before scale-set materialization stops.")
 	scaleSetUpdateCmd.Flags().StringVar(&scalesetGitHubRunnerGroup, "runner-group", "", "The GitHub runner group in which all runners of this scale set will be added.")
 	scaleSetUpdateCmd.Flags().BoolVar(&scalesetEnabled, "enabled", false, "Enable this scale set.")
 	scaleSetUpdateCmd.Flags().UintVar(&scalesetRunnerBootstrapTimeout, "runner-bootstrap-timeout", 20, "Duration in minutes after which a runner is considered failed if it does not join Github.")
@@ -580,6 +588,7 @@ func init() {
 	scaleSetAddCmd.Flags().UintVar(&scalesetMaxRunners, "max-runners", 5, "The maximum number of runner this scale set will create.")
 	scaleSetAddCmd.Flags().UintVar(&scalesetRunnerBootstrapTimeout, "runner-bootstrap-timeout", 20, "Duration in minutes after which a runner is considered failed if it does not join Github.")
 	scaleSetAddCmd.Flags().UintVar(&scalesetMinIdleRunners, "min-idle-runners", 1, "Attempt to maintain a minimum of idle self-hosted runners of this type.")
+	scaleSetAddCmd.Flags().UintVar(&scalesetMaxCreateAttempts, "max-create-attempts", appdefaults.DefaultScaleSetMaxCreateAttempts, "Maximum consecutive provider create failures before scale-set materialization stops.")
 	scaleSetAddCmd.Flags().BoolVar(&scalesetEnabled, "enabled", false, "Enable this scale set.")
 	scaleSetAddCmd.Flags().BoolVar(&scalesetEnableShell, "enable-shell", false, "Enable shell access for runners in this scale set.")
 	scaleSetAddCmd.Flags().StringVar(&endpointName, "endpoint", "", "When using the name of an entity, the endpoint must be specified when multiple entities with the same name exist.")

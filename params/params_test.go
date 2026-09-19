@@ -212,3 +212,24 @@ func TestUpdateControllerParamsValidateAgentVersion(t *testing.T) {
 		t.Errorf("expected %q to be rejected", version)
 	}
 }
+
+
+func TestScaleSetCreateCircuit(t *testing.T) {
+	scaleSet := ScaleSet{}
+	if got := scaleSet.CreateAttemptLimit(); got != 5 {
+		t.Fatalf("default create attempt limit = %d, want 5", got)
+	}
+	if scaleSet.CreateCircuitOpen() {
+		t.Fatal("new scale set circuit must start closed")
+	}
+
+	scaleSet.MaxCreateAttempts = 2
+	scaleSet.CreateFailures = 1
+	if scaleSet.CreateCircuitOpen() {
+		t.Fatal("circuit opened before reaching configured limit")
+	}
+	scaleSet.CreateFailures = 2
+	if !scaleSet.CreateCircuitOpen() {
+		t.Fatal("circuit did not open at configured limit")
+	}
+}

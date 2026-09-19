@@ -361,6 +361,86 @@ func (s *ScaleSetsTestSuite) TestScaleSetOperations() {
 	})
 }
 
+func (s *ScaleSetsTestSuite) TestScaleSetCreateFailureCircuitPersistence() {
+	createParams := params.CreateScaleSetParams{
+		Name:              "circuit-test-scaleset",
+		ProviderName:      "test-provider",
+		MaxRunners:        1,
+		MinIdleRunners:    0,
+		MaxCreateAttempts: 2,
+		Image:             "test-image",
+		Flavor:            "test-flavor",
+		OSType:            commonParams.Linux,
+		OSArch:            commonParams.Amd64,
+		GitHubRunnerGroup: "test-group",
+	}
+
+	scaleSet, err := s.Store.CreateEntityScaleSet(s.adminCtx, s.repoEntity, createParams)
+	s.Require().NoError(err)
+	s.T().Cleanup(func() {
+		s.Require().NoError(s.Store.DeleteScaleSetByID(s.adminCtx, scaleSet.ID))
+	})
+
+	s.Require().Equal(uint(2), scaleSet.MaxCreateAttempts)
+	s.Require().Zero(scaleSet.CreateFailures)
+	s.Require().False(scaleSet.CreateCircuitOpen())
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	scaleSet, err = s.Store.GetScaleSetByID(s.adminCtx, scaleSet.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(uint(1), scaleSet.CreateFailures)
+	s.Require().False(scaleSet.CreateCircuitOpen())
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	scaleSet, err = s.Store.GetScaleSetByID(s.adminCtx, scaleSet.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(uint(2), scaleSet.CreateFailures)
+	s.Require().True(scaleSet.CreateCircuitOpen())
+
+	s.Require().NoError(s.Store.ResetScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	scaleSet, err = s.Store.GetScaleSetByID(s.adminCtx, scaleSet.ID)
+	s.Require().NoError(err)
+	s.Require().Zero(scaleSet.CreateFailures)
+	s.Require().False(scaleSet.CreateCircuitOpen())
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	newLimit := uint(1)
+	scaleSet, err = s.Store.UpdateEntityScaleSet(
+		s.adminCtx,
+		s.repoEntity,
+		scaleSet.ID,
+		params.UpdateScaleSetParams{MaxCreateAttempts: &newLimit},
+		nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Equal(uint(1), scaleSet.MaxCreateAttempts)
+	s.Require().Zero(scaleSet.CreateFailures, "changing the budget is an intentional circuit reset")
+
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	newTimeout := uint(scaleSet.RunnerBootstrapTimeout + 1)
+	scaleSet, err = s.Store.UpdateEntityScaleSet(
+		s.adminCtx,
+		s.repoEntity,
+		scaleSet.ID,
+		params.UpdateScaleSetParams{RunnerBootstrapTimeout: &newTimeout},
+		nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Zero(scaleSet.CreateFailures, "changing bootstrap timeout must reset an open materialization circuit")
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	scaleSet, err = s.Store.UpdateEntityScaleSet(
+		s.adminCtx,
+		s.repoEntity,
+		scaleSet.ID,
+		params.UpdateScaleSetParams{RunnerPrefix: params.RunnerPrefix{Prefix: "remediated"}},
+		nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Zero(scaleSet.CreateFailures, "changing runner prefix must reset an open materialization circuit")
+}
+
 func TestScaleSetsTestSuite(t *testing.T) {
 	suite.Run(t, new(ScaleSetsTestSuite))
 }

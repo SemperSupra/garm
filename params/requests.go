@@ -669,6 +669,7 @@ type CreateScaleSetParams struct {
 	ProviderName           string              `json:"provider_name,omitempty"`
 	MaxRunners             uint                `json:"max_runners,omitempty"`
 	MinIdleRunners         uint                `json:"min_idle_runners,omitempty"`
+	MaxCreateAttempts      uint                `json:"max_create_attempts,omitempty"`
 	Image                  string              `json:"image,omitempty"`
 	Flavor                 string              `json:"flavor,omitempty"`
 	OSType                 commonParams.OSType `json:"os_type,omitempty"`
@@ -742,6 +743,7 @@ type UpdateScaleSetParams struct {
 	Enabled                *bool               `json:"enabled,omitempty"`
 	MaxRunners             *uint               `json:"max_runners,omitempty"`
 	MinIdleRunners         *uint               `json:"min_idle_runners,omitempty"`
+	MaxCreateAttempts      *uint               `json:"max_create_attempts,omitempty"`
 	RunnerBootstrapTimeout *uint               `json:"runner_bootstrap_timeout,omitempty"`
 	Image                  string              `json:"image,omitempty"`
 	Flavor                 string              `json:"flavor,omitempty"`

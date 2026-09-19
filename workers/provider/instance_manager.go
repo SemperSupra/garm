@@ -152,7 +152,15 @@ func (i *instanceManager) pseudoPoolID() string {
 	return fmt.Sprintf("%s-%s", i.scaleSet.Name, i.scaleSetEntity.ID)
 }
 
-func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instance) error {
+func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instance) (err error) {
+	materializationFailed := false
+	defer func() {
+		if err != nil || materializationFailed {
+			if recordErr := i.helper.RecordScaleSetCreateFailure(i.scaleSet.ID); recordErr != nil {
+				slog.ErrorContext(i.ctx, "recording scale set materialization failure", "error", recordErr, "scale_set_id", i.scaleSet.ID)
+			}
+		}
+	}()
 	entity, err := i.getEntity()
 	if err != nil {
 		return fmt.Errorf("getting entity: %w", err)
@@ -261,6 +269,7 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 	}
 
 	if providerInstance.Status == commonParams.InstanceError {
+		materializationFailed = true
 		instanceIDToDelete = instance.ProviderID
 		if instanceIDToDelete == "" {
 			instanceIDToDelete = instance.Name

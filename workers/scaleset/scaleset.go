@@ -380,6 +380,31 @@ func (w *Worker) removeRunnerFromGithubAndSetPendingDelete(runnerName string, ag
 	return nil
 }
 
+func materializationFailedBeforeActive(runner params.Instance) bool {
+	// Provider-pipeline failures are recorded by the provider worker before it
+	// transitions the instance through InstanceError. Do not count that same
+	// attempt again if Scale Set cleanup observes the brief error state.
+	if runner.Status == commonParams.InstanceError {
+		return false
+	}
+	switch runner.RunnerStatus {
+	case params.RunnerPending, params.RunnerInstalling, params.RunnerFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *Worker) recordMaterializationFailure(runner params.Instance, reason string) {
+	if !materializationFailedBeforeActive(runner) {
+		return
+	}
+	if err := w.store.IncrementScaleSetCreateFailures(w.ctx, w.scaleSet.ID); err != nil {
+		slog.ErrorContext(w.ctx, "recording scale set materialization failure",
+			"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name, "reason", reason, "error", err)
+	}
+}
+
 func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) (func(), error) {
 	lockNames := []string{}
 
@@ -434,6 +459,7 @@ func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) 
 				locking.Unlock(runner.Name, false)
 				continue
 			}
+			w.recordMaterializationFailure(runner, "runner timed out or failed before job start")
 			lockNames = append(lockNames, runner.Name)
 		}
 	}
@@ -540,6 +566,7 @@ func (w *Worker) consolidateRunnerState(runners []params.RunnerReference) error 
 			// which involves this runner. For the duration of the lifetime of this function, we
 			// hold the lock, so no race condition can occur.
 			w.runners[runner.ID] = instance
+			w.recordMaterializationFailure(runner, "runner disappeared from GitHub before job start")
 		}
 	}
 
@@ -630,6 +657,7 @@ func (w *Worker) consolidateProviderState() error {
 				locking.Unlock(runner.Name, false)
 				continue
 			}
+			w.recordMaterializationFailure(runner, "runner disappeared from provider before job start")
 		}
 		locking.Unlock(runner.Name, false)
 	}
@@ -849,8 +877,29 @@ Loop:
 }
 
 func (w *Worker) handleScaleUp() {
+	// Re-read the authoritative row before every scale-up. Instance and scale-set
+	// watcher events are processed concurrently, so relying only on the local
+	// watcher cache could race a provider failure update and create one more
+	// replacement after the circuit should have opened.
+	latestScaleSet, err := w.store.GetScaleSetByID(w.ctx, w.scaleSet.ID)
+	if err != nil {
+		slog.ErrorContext(w.ctx, "error refreshing scale set create circuit state", "error", err)
+		return
+	}
+	w.scaleSet = latestScaleSet
+
 	if !w.scaleSet.Enabled {
 		slog.DebugContext(w.ctx, "scale set is disabled; not scaling up")
+		return
+	}
+
+	if w.scaleSet.CreateCircuitOpen() {
+		slog.WarnContext(
+			w.ctx,
+			"scale set materialization circuit is open; not scaling up",
+			"create_failures", w.scaleSet.CreateFailures,
+			"max_create_attempts", w.scaleSet.CreateAttemptLimit(),
+		)
 		return
 	}
 

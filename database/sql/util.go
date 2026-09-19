@@ -475,6 +475,8 @@ func (s *sqlDatabase) sqlToCommonScaleSet(scaleSet ScaleSet) (params.ScaleSet, e
 		ExtendedState:          scaleSet.ExtendedState,
 		LastMessageID:          scaleSet.LastMessageID,
 		DesiredRunnerCount:     scaleSet.DesiredRunnerCount,
+		MaxCreateAttempts:      scaleSet.MaxCreateAttempts,
+		CreateFailures:         scaleSet.CreateFailures,
 		EnableShell:            scaleSet.EnableShell,
 		Generation:             scaleSet.Generation,
 	}
