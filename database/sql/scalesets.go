@@ -580,9 +580,9 @@ func (s *sqlDatabase) SetScaleSetDesiredRunnerCount(_ context.Context, scaleSetI
 }
 
 
-// IncrementScaleSetCreateFailures records one failed provider materialization
-// attempt. The update is serialized with a row lock so concurrent scale-set
-// instance managers cannot lose increments.
+// IncrementScaleSetCreateFailures records one failed materialization attempt.
+// The update is serialized with a row lock so concurrent scale-set workers
+// cannot lose increments.
 func (s *sqlDatabase) IncrementScaleSetCreateFailures(_ context.Context, scaleSetID uint) (err error) {
 	var scaleSet params.ScaleSet
 	var rowsAffected int64
@@ -617,7 +617,8 @@ func (s *sqlDatabase) IncrementScaleSetCreateFailures(_ context.Context, scaleSe
 }
 
 // ResetScaleSetCreateFailures closes the materialization circuit after a
-// successful provider create. It is a no-op when the counter is already zero.
+// runner starts a job or an intentional remediation. It is a no-op when the
+// counter is already zero.
 func (s *sqlDatabase) ResetScaleSetCreateFailures(_ context.Context, scaleSetID uint) (err error) {
 	var scaleSet params.ScaleSet
 	var rowsAffected int64
