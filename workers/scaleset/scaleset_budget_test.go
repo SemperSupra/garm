@@ -73,6 +73,13 @@ func TestMaterializationFailedBeforeActive(t *testing.T) {
 			t.Fatalf("did not expect status %q to count as pre-active materialization failure", status)
 		}
 	}
+
+	if materializationFailedBeforeActive(params.Instance{
+		Status:       commonParams.InstanceError,
+		RunnerStatus: params.RunnerPending,
+	}) {
+		t.Fatal("provider-owned InstanceError must not be double-counted by Scale Set cleanup")
+	}
 }
 
 
