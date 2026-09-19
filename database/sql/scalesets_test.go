@@ -415,6 +415,30 @@ func (s *ScaleSetsTestSuite) TestScaleSetCreateFailureCircuitPersistence() {
 	s.Require().NoError(err)
 	s.Require().Equal(uint(1), scaleSet.MaxCreateAttempts)
 	s.Require().Zero(scaleSet.CreateFailures, "changing the budget is an intentional circuit reset")
+
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	newTimeout := uint(scaleSet.RunnerBootstrapTimeout + 1)
+	scaleSet, err = s.Store.UpdateEntityScaleSet(
+		s.adminCtx,
+		s.repoEntity,
+		scaleSet.ID,
+		params.UpdateScaleSetParams{RunnerBootstrapTimeout: &newTimeout},
+		nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Zero(scaleSet.CreateFailures, "changing bootstrap timeout must reset an open materialization circuit")
+
+	s.Require().NoError(s.Store.IncrementScaleSetCreateFailures(s.adminCtx, scaleSet.ID))
+	scaleSet, err = s.Store.UpdateEntityScaleSet(
+		s.adminCtx,
+		s.repoEntity,
+		scaleSet.ID,
+		params.UpdateScaleSetParams{RunnerPrefix: params.RunnerPrefix{Prefix: "remediated"}},
+		nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Zero(scaleSet.CreateFailures, "changing runner prefix must reset an open materialization circuit")
 }
 
 func TestScaleSetsTestSuite(t *testing.T) {
