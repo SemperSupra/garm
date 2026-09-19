@@ -339,6 +339,7 @@ func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param param
 
 	if param.TemplateID != nil && (scaleSet.TemplateID == nil || *param.TemplateID != *scaleSet.TemplateID) {
 		updates["template_id"] = param.TemplateID
+		resetCreateFailures = true
 	}
 
 	if param.ProxyID != nil && (scaleSet.ProxyID == nil || *param.ProxyID != *scaleSet.ProxyID) {
@@ -386,6 +387,7 @@ func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param param
 
 	if param.Prefix != "" && param.Prefix != scaleSet.RunnerPrefix {
 		updates["runner_prefix"] = param.Prefix
+		resetCreateFailures = true
 	}
 
 	if param.MaxRunners != nil && *param.MaxRunners != scaleSet.MaxRunners {
@@ -418,6 +420,7 @@ func (s *sqlDatabase) updateScaleSet(tx *gorm.DB, scaleSet ScaleSet, param param
 
 	if param.RunnerBootstrapTimeout != nil && *param.RunnerBootstrapTimeout > 0 && *param.RunnerBootstrapTimeout != scaleSet.RunnerBootstrapTimeout {
 		updates["runner_bootstrap_timeout"] = *param.RunnerBootstrapTimeout
+		resetCreateFailures = true
 	}
 
 	if incrementGeneration {
