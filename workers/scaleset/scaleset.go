@@ -381,6 +381,12 @@ func (w *Worker) removeRunnerFromGithubAndSetPendingDelete(runnerName string, ag
 }
 
 func materializationFailedBeforeActive(runner params.Instance) bool {
+	// Provider-pipeline failures are recorded by the provider worker before it
+	// transitions the instance through InstanceError. Do not count that same
+	// attempt again if Scale Set cleanup observes the brief error state.
+	if runner.Status == commonParams.InstanceError {
+		return false
+	}
 	switch runner.RunnerStatus {
 	case params.RunnerPending, params.RunnerInstalling, params.RunnerFailed:
 		return true
