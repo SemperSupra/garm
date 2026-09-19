@@ -719,9 +719,9 @@ type ScaleSet struct {
 	Enabled            bool                `json:"enabled,omitempty"`
 	Instances          []Instance          `json:"instances,omitempty"`
 	DesiredRunnerCount int                 `json:"desired_runner_count,omitempty"`
-	// MaxCreateAttempts is the maximum number of consecutive provider create
-	// failures tolerated before this scale set stops creating replacement
-	// runners. Zero uses the application default.
+	// MaxCreateAttempts is the maximum number of consecutive materializations
+	// that may fail before a runner starts a job before this scale set stops
+	// creating replacements. Zero uses the application default.
 	MaxCreateAttempts uint `json:"max_create_attempts,omitempty"`
 	// CreateFailures is the persisted count of consecutive materializations
 	// that fail before a runner starts a job. JobStarted or an intentional
@@ -806,7 +806,7 @@ func (p ScaleSet) GetID() uint {
 	return p.ID
 }
 
-// CreateAttemptLimit returns the effective consecutive provider-create
+// CreateAttemptLimit returns the effective consecutive materialization
 // failure ceiling for this scale set.
 func (p ScaleSet) CreateAttemptLimit() uint {
 	if p.MaxCreateAttempts == 0 {
