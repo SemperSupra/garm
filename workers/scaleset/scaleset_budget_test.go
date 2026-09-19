@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
+	commonParams "github.com/cloudbase/garm-provider-common/params"
 	dbMocks "github.com/cloudbase/garm/database/common/mocks"
 	"github.com/cloudbase/garm/locking"
 	"github.com/cloudbase/garm/params"
