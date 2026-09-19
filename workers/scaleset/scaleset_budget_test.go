@@ -111,7 +111,7 @@ func TestHandleJobsStartedResetsMaterializationFailures(t *testing.T) {
 		scaleSet:   scaleSet,
 	}
 
-	err := worker.HandleJobsStarted([]params.ScaleSetJobMessage{{
+	err = worker.HandleJobsStarted([]params.ScaleSetJobMessage{{
 		MessageType: params.MessageTypeJobStarted,
 		JobID:       "job-1",
 		RunnerName:  "runner-1",
