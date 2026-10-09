@@ -205,9 +205,6 @@ func (e *external) GetInstance(ctx context.Context, instance string, getInstance
 	}
 	asEnv = append(asEnv, e.environmentVariables...)
 
-	// nolint:golangci-lint,godox
-	// TODO(gabriel-samfira): handle error types. Of particular interest is to
-	// know when the error is ErrNotFound.
 	metrics.InstanceOperationCount.WithLabelValues(
 		"GetInstance", // label: operation
 		e.cfg.Name,    // label: provider
@@ -218,6 +215,10 @@ func (e *external) GetInstance(ctx context.Context, instance string, getInstance
 			"GetInstance", // label: operation
 			e.cfg.Name,    // label: provider
 		).Inc()
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == commonExecution.ExitCodeNotFound {
+			return commonParams.ProviderInstance{}, garmErrors.ErrNotFound
+		}
 		return commonParams.ProviderInstance{}, garmErrors.NewProviderError("provider binary %s returned error: %s", e.execPath, err)
 	}
 

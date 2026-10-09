@@ -675,6 +675,13 @@ func (w *Worker) consolidateProviderState() error {
 		}
 
 		if _, ok := providerRunnersByName[runner.Name]; !ok {
+			// List and Get can disagree while a provider resource is changing state.
+			// A list miss alone cannot authorize a DB transition or charge the
+			// materialization circuit for a runner that may still exist.
+			if !w.providerAbsenceConfirmed(runner, deleteInstanceParams.DeleteInstanceV011.ProviderBaseParams) {
+				locking.Unlock(runner.Name, false)
+				continue
+			}
 			// The runner is not in the provider anymore. Remove it from the DB.
 			slog.InfoContext(w.ctx, "runner does not exist in provider; removing from database", "runner_name", runner.Name)
 			if err := w.removeRunnerFromGithubAndSetPendingDelete(runner.Name, runner.AgentID); err != nil {
@@ -691,6 +698,28 @@ func (w *Worker) consolidateProviderState() error {
 	}
 
 	return nil
+}
+
+func (w *Worker) providerAbsenceConfirmed(runner params.Instance, baseParams common.ProviderBaseParams) bool {
+	identifier := runner.ProviderID
+	if identifier == "" {
+		identifier = runner.Name
+	}
+	_, err := w.provider.GetInstance(w.ctx, identifier, common.GetInstanceParams{
+		GetInstanceV011: common.GetInstanceV011Params{ProviderBaseParams: baseParams},
+	})
+	switch {
+	case err == nil:
+		slog.WarnContext(w.ctx, "provider list omitted an existing runner; deferring reconciliation", "runner_name", runner.Name)
+		return false
+	case errors.Is(err, runnerErrors.ErrNotFound):
+		return true
+	default:
+		// A timeout, malformed response, or provider error is not proof of
+		// absence. Leave both the runner and failure budget unchanged.
+		slog.WarnContext(w.ctx, "provider absence is unconfirmed; deferring reconciliation", "runner_name", runner.Name)
+		return false
+	}
 }
 
 func (w *Worker) pseudoPoolID() (string, error) {
