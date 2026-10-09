@@ -16,15 +16,45 @@ package scaleset
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 
+	providerErrors "github.com/cloudbase/garm-provider-common/errors"
 	commonParams "github.com/cloudbase/garm-provider-common/params"
 	dbMocks "github.com/cloudbase/garm/database/common/mocks"
 	"github.com/cloudbase/garm/locking"
 	"github.com/cloudbase/garm/params"
+	"github.com/cloudbase/garm/runner/common"
+	providerMocks "github.com/cloudbase/garm/runner/common/mocks"
 )
+
+func TestProviderListMissNeedsConfirmedAbsence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		getError  error
+		confirmed bool
+	}{
+		{name: "direct get still sees active app", confirmed: false},
+		{name: "typed not found", getError: providerErrors.ErrNotFound, confirmed: true},
+		{name: "transient provider failure", getError: errors.New("provider unavailable"), confirmed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := providerMocks.NewProvider(t)
+			provider.On("GetInstance", mock.Anything, "provider-runner-1", mock.Anything).
+				Return(commonParams.ProviderInstance{Name: "runner-1", ProviderID: "provider-runner-1"}, tc.getError).
+				Once()
+			worker := &Worker{ctx: context.Background(), provider: provider}
+			actual := worker.providerAbsenceConfirmed(params.Instance{
+				Name: "runner-1", ProviderID: "provider-runner-1",
+			}, common.ProviderBaseParams{})
+			if actual != tc.confirmed {
+				t.Fatalf("confirmed=%t, want %t", actual, tc.confirmed)
+			}
+		})
+	}
+}
 
 func TestHandleScaleUpStopsAtAuthoritativeOpenCreateCircuit(t *testing.T) {
 	store := dbMocks.NewStore(t)
@@ -62,7 +92,6 @@ func TestHandleScaleUpStopsAtAuthoritativeOpenCreateCircuit(t *testing.T) {
 	}
 }
 
-
 func TestMaterializationFailedBeforeActive(t *testing.T) {
 	for _, status := range []params.RunnerStatus{params.RunnerPending, params.RunnerInstalling, params.RunnerFailed} {
 		if !materializationFailedBeforeActive(params.Instance{RunnerStatus: status}) {
@@ -82,7 +111,6 @@ func TestMaterializationFailedBeforeActive(t *testing.T) {
 		t.Fatal("provider-owned InstanceError must not be double-counted by Scale Set cleanup")
 	}
 }
-
 
 func TestHandleJobsStartedResetsMaterializationFailures(t *testing.T) {
 	store := dbMocks.NewStore(t)
