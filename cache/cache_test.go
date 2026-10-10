@@ -1723,7 +1723,7 @@ func (c *CacheTestSuite) TestConcurrentCredentialsAndEntityAccessDoesNotDeadlock
 	operations := []func(){
 		func() { SetGithubCredentials(c.entity.Credentials) },
 		func() { GetEntity(c.entity.ID) },
-		func() { EntityRateLimitReached(c.entity.ID) },
+		func() { SetGiteaCredentials(giteaEntity.Credentials) },
 		func() { SetEndpoint(giteaEntity.Credentials.Endpoint) },
 		func() { GetEntity(giteaEntity.ID) },
 		func() { GetAllEntities() },
