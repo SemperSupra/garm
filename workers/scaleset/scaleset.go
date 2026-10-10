@@ -402,7 +402,15 @@ func (w *Worker) recordMaterializationFailure(runner params.Instance, reason str
 	if err := w.store.IncrementScaleSetCreateFailures(w.ctx, w.scaleSet.ID); err != nil {
 		slog.ErrorContext(w.ctx, "recording scale set materialization failure",
 			"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name, "reason", reason, "error", err)
+		return
 	}
+	// Record the successful increment too. A circuit-open warning only reports
+	// the final count; this bounded event identifies which cleanup path charged
+	// it without exposing a provider response or runner credentials.
+	slog.WarnContext(w.ctx, "scale set materialization failure recorded",
+		"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name,
+		"runner_status", runner.RunnerStatus, "instance_status", runner.Status,
+		"reason", reason)
 }
 
 func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) (func(), error) {
