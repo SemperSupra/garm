@@ -139,7 +139,15 @@ func (e *EntityCache) GetEntity(entityID string) (params.ForgeEntity, bool) {
 // without holding the entity cache lock; holding one cache's lock while
 // taking another's can deadlock.
 func withCachedCredentials(entity params.ForgeEntity) params.ForgeEntity {
-	if creds, ok := GetForgeCredentials(entity.Credentials.ForgeType, entity.Credentials.ID); ok {
+	var creds params.ForgeCredentials
+	var ok bool
+	switch entity.Credentials.ForgeType {
+	case params.GithubEndpointType:
+		creds, ok = GetGithubCredentials(entity.Credentials.ID)
+	case params.GiteaEndpointType:
+		creds, ok = GetGiteaCredentials(entity.Credentials.ID)
+	}
+	if ok {
 		entity.Credentials = creds
 	}
 	return entity
