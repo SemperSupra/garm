@@ -16,6 +16,7 @@ package v011
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	providerErrors "github.com/cloudbase/garm-provider-common/errors"
 	"github.com/cloudbase/garm/config"
 	"github.com/cloudbase/garm/runner/common"
 )
@@ -74,4 +76,22 @@ exit 17
 	require.Contains(t, err.Error(), "provider binary")
 	require.Contains(t, err.Error(), "returned error")
 	require.NotContains(t, err.Error(), "failed to decode response")
+}
+
+func TestGetInstanceDistinguishesNotFoundFromOtherProviderFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		exitCode string
+		notFound bool
+	}{
+		{name: "not found", exitCode: "30", notFound: true},
+		{name: "ordinary failure", exitCode: "1", notFound: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := testExternalProvider(writeTestProvider(t, "exit "+tc.exitCode))
+			_, err := provider.GetInstance(context.Background(), "runner-1", common.GetInstanceParams{})
+			require.Error(t, err)
+			require.Equal(t, tc.notFound, errors.Is(err, providerErrors.ErrNotFound))
+		})
+	}
 }

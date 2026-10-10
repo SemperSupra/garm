@@ -402,7 +402,15 @@ func (w *Worker) recordMaterializationFailure(runner params.Instance, reason str
 	if err := w.store.IncrementScaleSetCreateFailures(w.ctx, w.scaleSet.ID); err != nil {
 		slog.ErrorContext(w.ctx, "recording scale set materialization failure",
 			"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name, "reason", reason, "error", err)
+		return
 	}
+	// Record the successful increment too. A circuit-open warning only reports
+	// the final count; this bounded event identifies which cleanup path charged
+	// it without exposing a provider response or runner credentials.
+	slog.WarnContext(w.ctx, "scale set materialization failure recorded",
+		"scale_set_id", w.scaleSet.ID, "runner_name", runner.Name,
+		"runner_status", runner.RunnerStatus, "instance_status", runner.Status,
+		"reason", reason)
 }
 
 func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) (func(), error) {
@@ -647,6 +655,13 @@ func (w *Worker) consolidateProviderState() error {
 		}
 
 		if _, ok := providerRunnersByName[runner.Name]; !ok {
+			// List and Get can disagree while a provider resource is changing state.
+			// A list miss alone cannot authorize a DB transition or charge the
+			// materialization circuit for a runner that may still exist.
+			if !w.providerAbsenceConfirmed(runner, deleteInstanceParams.DeleteInstanceV011.ProviderBaseParams) {
+				locking.Unlock(runner.Name, false)
+				continue
+			}
 			// The runner is not in the provider anymore. Remove it from the DB.
 			slog.InfoContext(w.ctx, "runner does not exist in provider; removing from database", "runner_name", runner.Name)
 			if err := w.removeRunnerFromGithubAndSetPendingDelete(runner.Name, runner.AgentID); err != nil {
@@ -663,6 +678,28 @@ func (w *Worker) consolidateProviderState() error {
 	}
 
 	return nil
+}
+
+func (w *Worker) providerAbsenceConfirmed(runner params.Instance, baseParams common.ProviderBaseParams) bool {
+	identifier := runner.ProviderID
+	if identifier == "" {
+		identifier = runner.Name
+	}
+	_, err := w.provider.GetInstance(w.ctx, identifier, common.GetInstanceParams{
+		GetInstanceV011: common.GetInstanceV011Params{ProviderBaseParams: baseParams},
+	})
+	switch {
+	case err == nil:
+		slog.WarnContext(w.ctx, "provider list omitted an existing runner; deferring reconciliation", "runner_name", runner.Name)
+		return false
+	case errors.Is(err, runnerErrors.ErrNotFound):
+		return true
+	default:
+		// A timeout, malformed response, or provider error is not proof of
+		// absence. Leave both the runner and failure budget unchanged.
+		slog.WarnContext(w.ctx, "provider absence is unconfirmed; deferring reconciliation", "runner_name", runner.Name)
+		return false
+	}
 }
 
 func (w *Worker) pseudoPoolID() (string, error) {
