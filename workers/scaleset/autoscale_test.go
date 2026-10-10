@@ -77,6 +77,11 @@ func TestAutoscaleRequiresFreshRunnerState(t *testing.T) {
 				fresh = append(fresh, idle)
 			}
 			store := storeMocks.NewStore(t)
+			scaleSet := params.ScaleSet{ID: 4, RepoID: entityID, ScaleSetID: 42, Enabled: true, MaxRunners: 1}
+			if direction == "up" {
+				scaleSet.MinIdleRunners = 1
+			}
+			store.EXPECT().GetScaleSetByID(mock.Anything, uint(4)).Return(scaleSet, nil).Maybe()
 			store.EXPECT().ListScaleSetInstances(mock.Anything, uint(4), false).
 				Run(func(context.Context, uint, bool) { close(failedRefresh) }).Return(nil, errors.New("database unavailable")).Once()
 			store.EXPECT().ListScaleSetInstances(mock.Anything, uint(4), false).
@@ -96,7 +101,7 @@ func TestAutoscaleRequiresFreshRunnerState(t *testing.T) {
 				}).Maybe()
 			w := &Worker{
 				ctx: ctx, store: store, consumerID: entityID, quit: make(chan struct{}),
-				scaleSet: params.ScaleSet{ID: 4, RepoID: entityID, ScaleSetID: 42, Enabled: true, MaxRunners: 1},
+				scaleSet: scaleSet,
 				runners:  map[string]params.Instance{},
 			}
 			if direction == "up" {

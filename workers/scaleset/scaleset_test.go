@@ -296,6 +296,10 @@ func TestReconcileDeletedRunnerCreatesOneReplacement(t *testing.T) {
 	t.Cleanup(func() { cache.DeleteGithubClient(entityID) })
 
 	store := storeMocks.NewStore(t)
+	store.EXPECT().GetScaleSetByID(mock.Anything, uint(scaleSetID)).Return(params.ScaleSet{
+		ID: scaleSetID, ScaleSetID: 42, RepoID: entityID, Enabled: true,
+		MinIdleRunners: 1, MaxRunners: 1,
+	}, nil).Maybe()
 	store.EXPECT().
 		ListScaleSetInstances(mock.Anything, uint(scaleSetID), false).
 		Return([]params.Instance{{
