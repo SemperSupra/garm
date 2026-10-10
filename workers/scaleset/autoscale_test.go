@@ -27,7 +27,7 @@ import (
 )
 
 func TestAutoscaleRequiresFreshRunnerState(t *testing.T) {
-	require.NoError(t, registerTestLocker())
+	ensureBudgetTestLocker(t)
 	for _, direction := range []string{"up", "down"} {
 		t.Run(direction, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())

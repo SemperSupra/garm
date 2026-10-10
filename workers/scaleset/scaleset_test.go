@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,20 +36,11 @@ import (
 	commonParams "github.com/cloudbase/garm-provider-common/params"
 	"github.com/cloudbase/garm/cache"
 	storeMocks "github.com/cloudbase/garm/database/common/mocks"
-	"github.com/cloudbase/garm/locking"
 	"github.com/cloudbase/garm/params"
 	runnerMocks "github.com/cloudbase/garm/runner/common/mocks"
 )
 
 const runnerRegistrationPath = "/actions/runner-registration"
-
-var registerTestLocker = sync.OnceValue(func() error {
-	locker, err := locking.NewLocalLocker(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-	return locking.RegisterLocker(locker)
-})
 
 func TestDeletingInstancesDoNotCountAsRunnersButConsumeProviderSlots(t *testing.T) {
 	for _, status := range []commonParams.InstanceStatus{
@@ -91,7 +81,7 @@ func TestDeletingInstancesDoNotIncreaseScaleDownDelta(t *testing.T) {
 func TestScaleDownRemovesExcessIdleRunnerDespitePendingDeletion(t *testing.T) {
 	const entityID = "scale-down-repo"
 	ctx := context.Background()
-	require.NoError(t, registerTestLocker())
+	ensureBudgetTestLocker(t)
 
 	var removals atomic.Int32
 	var server *httptest.Server
