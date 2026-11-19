@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v84/github"
@@ -44,19 +45,20 @@ type githubClient struct {
 
 	entity params.ForgeEntity
 	cli    *github.Client
+
+	// limits holds the most recent rate limit values observed on any
+	// response from this client, including error responses. Rate limited
+	// (403/429) responses also carry these headers, so this stays accurate
+	// while the quota is exhausted.
+	mux    sync.Mutex
+	limits params.GithubRateLimit
 }
 
 func (g *githubClient) ListEntityHooks(ctx context.Context, opts *github.ListOptions) (ret []*github.Hook, response *github.Response, err error) {
-	metrics.GithubOperationCount.WithLabelValues(
-		"ListHooks",           // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("ListHooks")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"ListHooks",           // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("ListHooks")
 		}
 	}()
 	switch g.entity.EntityType {
@@ -69,23 +71,18 @@ func (g *githubClient) ListEntityHooks(ctx context.Context, opts *github.ListOpt
 	default:
 		return nil, nil, fmt.Errorf("invalid entity type: %s", g.entity.EntityType)
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
+	err = parseError(response, err)
 	return ret, response, err
 }
 
 func (g *githubClient) GetEntityHook(ctx context.Context, id int64) (ret *github.Hook, err error) {
-	metrics.GithubOperationCount.WithLabelValues(
-		"GetHook",             // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("GetHook")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"GetHook",             // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("GetHook")
 		}
 	}()
 	var response *github.Response
@@ -100,23 +97,18 @@ func (g *githubClient) GetEntityHook(ctx context.Context, id int64) (ret *github
 		return nil, errors.New("invalid entity type")
 	}
 
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
+	err = parseError(response, err)
 	return ret, err
 }
 
 func (g *githubClient) createGithubEntityHook(ctx context.Context, hook *github.Hook) (ret *github.Hook, err error) {
-	metrics.GithubOperationCount.WithLabelValues(
-		"CreateHook",          // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("CreateHook")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"CreateHook",          // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("CreateHook")
 		}
 	}()
 	var response *github.Response
@@ -128,9 +120,10 @@ func (g *githubClient) createGithubEntityHook(ctx context.Context, hook *github.
 	default:
 		return nil, errors.New("invalid entity type")
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
+	err = parseError(response, err)
 	return ret, err
 }
 
@@ -146,16 +139,10 @@ func (g *githubClient) CreateEntityHook(ctx context.Context, hook *github.Hook) 
 }
 
 func (g *githubClient) DeleteEntityHook(ctx context.Context, id int64) (ret *github.Response, err error) {
-	metrics.GithubOperationCount.WithLabelValues(
-		"DeleteHook",          // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("DeleteHook")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"DeleteHook",          // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("DeleteHook")
 		}
 	}()
 	switch g.entity.EntityType {
@@ -168,23 +155,18 @@ func (g *githubClient) DeleteEntityHook(ctx context.Context, id int64) (ret *git
 	default:
 		return nil, errors.New("invalid entity type")
 	}
-	if err == nil && ret != nil {
+	if ret != nil {
 		g.recordLimits(ret.Rate)
 	}
+	err = parseError(ret, err)
 	return ret, err
 }
 
 func (g *githubClient) PingEntityHook(ctx context.Context, id int64) (ret *github.Response, err error) {
-	metrics.GithubOperationCount.WithLabelValues(
-		"PingHook",            // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("PingHook")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"PingHook",            // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("PingHook")
 		}
 	}()
 	switch g.entity.EntityType {
@@ -198,9 +180,10 @@ func (g *githubClient) PingEntityHook(ctx context.Context, id int64) (ret *githu
 		return nil, errors.New("invalid entity type")
 	}
 
-	if err == nil && ret != nil {
+	if ret != nil {
 		g.recordLimits(ret.Rate)
 	}
+	err = parseError(ret, err)
 	return ret, err
 }
 
@@ -209,16 +192,10 @@ func (g *githubClient) ListEntityRunners(ctx context.Context, opts *github.ListR
 	var response *github.Response
 	var err error
 
-	metrics.GithubOperationCount.WithLabelValues(
-		"ListEntityRunners",   // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("ListEntityRunners")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"ListEntityRunners",   // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("ListEntityRunners")
 		}
 	}()
 
@@ -234,9 +211,10 @@ func (g *githubClient) ListEntityRunners(ctx context.Context, opts *github.ListR
 	default:
 		return nil, nil, errors.New("invalid entity type")
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
+	err = parseError(response, err)
 	return ret, response, err
 }
 
@@ -245,16 +223,10 @@ func (g *githubClient) ListEntityRunnerApplicationDownloads(ctx context.Context)
 	var response *github.Response
 	var err error
 
-	metrics.GithubOperationCount.WithLabelValues(
-		"ListEntityRunnerApplicationDownloads", // label: operation
-		g.entity.LabelScope(),                  // label: scope
-	).Inc()
+	g.recordOp("ListEntityRunnerApplicationDownloads")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"ListEntityRunnerApplicationDownloads", // label: operation
-				g.entity.LabelScope(),                  // label: scope
-			).Inc()
+			g.recordOpFailure("ListEntityRunnerApplicationDownloads")
 		}
 	}()
 
@@ -270,9 +242,30 @@ func (g *githubClient) ListEntityRunnerApplicationDownloads(ctx context.Context)
 	default:
 		return nil, nil, errors.New("invalid entity type")
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
+	err = parseError(response, err)
+	return ret, response, err
+}
+
+func (g *githubClient) GetWorkflowJobByID(ctx context.Context, owner, repo string, jobID int64) (*github.WorkflowJob, *github.Response, error) {
+	var ret *github.WorkflowJob
+	var response *github.Response
+	var err error
+
+	g.recordOp("GetWorkflowJobByID")
+	defer func() {
+		if err != nil {
+			g.recordOpFailure("GetWorkflowJobByID")
+		}
+	}()
+
+	ret, response, err = g.ActionsService.GetWorkflowJobByID(ctx, owner, repo, jobID)
+	if response != nil {
+		g.recordLimits(response.Rate)
+	}
+	err = parseError(response, err)
 	return ret, response, err
 }
 
@@ -287,10 +280,14 @@ func parseError(response *github.Response, err error) error {
 		return runnerErrors.ErrNotFound
 	case http.StatusUnauthorized:
 		return runnerErrors.ErrUnauthorized
+	case http.StatusForbidden:
+		// Also sent for secondary rate limits and missing permissions, so
+		// not the same as a 401. The original error carries the reason.
+		return runnerErrors.NewForbiddenError("forbidden: %v", err)
 	case http.StatusUnprocessableEntity:
 		return runnerErrors.ErrBadRequest
 	default:
-		if statusCode >= 100 && statusCode < 300 {
+		if statusCode >= 100 && statusCode < 300 && err == nil {
 			return nil
 		}
 		if err != nil {
@@ -301,6 +298,8 @@ func parseError(response *github.Response, err error) error {
 					return runnerErrors.ErrNotFound
 				case http.StatusUnauthorized:
 					return runnerErrors.ErrUnauthorized
+				case http.StatusForbidden:
+					return runnerErrors.NewForbiddenError("forbidden: %v", err)
 				case http.StatusUnprocessableEntity:
 					return runnerErrors.ErrBadRequest
 				default:
@@ -321,16 +320,10 @@ func (g *githubClient) RemoveEntityRunner(ctx context.Context, runnerID int64) e
 	var response *github.Response
 	var err error
 
-	metrics.GithubOperationCount.WithLabelValues(
-		"RemoveEntityRunner",  // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("RemoveEntityRunner")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"RemoveEntityRunner",  // label: operation
-				g.entity.LabelScope(), // label: scope
-			).Inc()
+			g.recordOpFailure("RemoveEntityRunner")
 		}
 	}()
 
@@ -346,7 +339,7 @@ func (g *githubClient) RemoveEntityRunner(ctx context.Context, runnerID int64) e
 	default:
 		return errors.New("invalid entity type")
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
 
@@ -357,21 +350,27 @@ func (g *githubClient) RemoveEntityRunner(ctx context.Context, runnerID int64) e
 	return nil
 }
 
+// runnersDisabledError converts a 404 from the runner registration
+// endpoints into a conflict. GitHub answers 404 on them until self hosted
+// runners are enabled on the entity, which would otherwise read as the
+// entity itself being gone.
+func (g *githubClient) runnersDisabledError(err error) error {
+	if !errors.Is(err, runnerErrors.ErrNotFound) {
+		return err
+	}
+	return runnerErrors.NewConflictError(
+		"runner registration returned 404 for %s. On GitHub this usually means self hosted runners are not enabled on the entity", g.entity.String())
+}
+
 func (g *githubClient) CreateEntityRegistrationToken(ctx context.Context) (*github.RegistrationToken, *github.Response, error) {
 	var ret *github.RegistrationToken
 	var response *github.Response
 	var err error
 
-	metrics.GithubOperationCount.WithLabelValues(
-		"CreateEntityRegistrationToken", // label: operation
-		g.entity.LabelScope(),           // label: scope
-	).Inc()
+	g.recordOp("CreateEntityRegistrationToken")
 	defer func() {
 		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"CreateEntityRegistrationToken", // label: operation
-				g.entity.LabelScope(),           // label: scope
-			).Inc()
+			g.recordOpFailure("CreateEntityRegistrationToken")
 		}
 	}()
 
@@ -387,10 +386,10 @@ func (g *githubClient) CreateEntityRegistrationToken(ctx context.Context) (*gith
 	default:
 		return nil, nil, errors.New("invalid entity type")
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
-
+	err = g.runnersDisabledError(parseError(response, err))
 	return ret, response, err
 }
 
@@ -402,23 +401,14 @@ func (g *githubClient) getOrganizationRunnerGroupIDByName(ctx context.Context, e
 	}
 
 	for {
-		metrics.GithubOperationCount.WithLabelValues(
-			"ListOrganizationRunnerGroups", // label: operation
-			entity.LabelScope(),            // label: scope
-		).Inc()
+		g.recordOp("ListOrganizationRunnerGroups")
 		runnerGroups, ghResp, err := g.ListOrganizationRunnerGroups(ctx, entity.Owner, &opts)
-		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"ListOrganizationRunnerGroups", // label: operation
-				entity.LabelScope(),            // label: scope
-			).Inc()
-			if ghResp != nil && ghResp.StatusCode == http.StatusUnauthorized {
-				return 0, fmt.Errorf("error fetching runners: %w", runnerErrors.ErrUnauthorized)
-			}
-			return 0, fmt.Errorf("error fetching runners: %w", err)
-		}
 		if ghResp != nil {
 			g.recordLimits(ghResp.Rate)
+		}
+		if err := parseError(ghResp, err); err != nil {
+			g.recordOpFailure("ListOrganizationRunnerGroups")
+			return 0, fmt.Errorf("error fetching runners: %w", err)
 		}
 
 		for _, runnerGroup := range runnerGroups.RunnerGroups {
@@ -442,23 +432,14 @@ func (g *githubClient) getEnterpriseRunnerGroupIDByName(ctx context.Context, ent
 	}
 
 	for {
-		metrics.GithubOperationCount.WithLabelValues(
-			"ListRunnerGroups",  // label: operation
-			entity.LabelScope(), // label: scope
-		).Inc()
+		g.recordOp("ListRunnerGroups")
 		runnerGroups, ghResp, err := g.enterprise.ListRunnerGroups(ctx, entity.Owner, &opts)
-		if err != nil {
-			metrics.GithubOperationFailedCount.WithLabelValues(
-				"ListRunnerGroups",  // label: operation
-				entity.LabelScope(), // label: scope
-			).Inc()
-			if ghResp != nil && ghResp.StatusCode == http.StatusUnauthorized {
-				return 0, fmt.Errorf("error fetching runners: %w", runnerErrors.ErrUnauthorized)
-			}
-			return 0, fmt.Errorf("error fetching runners: %w", err)
-		}
 		if ghResp != nil {
 			g.recordLimits(ghResp.Rate)
+		}
+		if err := parseError(ghResp, err); err != nil {
+			g.recordOpFailure("ListRunnerGroups")
+			return 0, fmt.Errorf("error fetching runners: %w", err)
 		}
 		for _, runnerGroup := range runnerGroups.RunnerGroups {
 			if runnerGroup.Name != nil && *runnerGroup.Name == rgName {
@@ -520,10 +501,7 @@ func (g *githubClient) GetEntityJITConfig(ctx context.Context, instance string, 
 		WorkFolder: github.Ptr("_work"),
 	}
 
-	metrics.GithubOperationCount.WithLabelValues(
-		"GetEntityJITConfig",  // label: operation
-		g.entity.LabelScope(), // label: scope
-	).Inc()
+	g.recordOp("GetEntityJITConfig")
 
 	var ret *github.JITRunnerConfig
 	var response *github.Response
@@ -536,18 +514,12 @@ func (g *githubClient) GetEntityJITConfig(ctx context.Context, instance string, 
 	case params.ForgeEntityTypeEnterprise:
 		ret, response, err = g.enterprise.GenerateEnterpriseJITConfig(ctx, g.entity.Owner, &req)
 	}
-	if err == nil && response != nil {
+	if response != nil {
 		g.recordLimits(response.Rate)
 	}
 	if err != nil {
-		metrics.GithubOperationFailedCount.WithLabelValues(
-			"GetEntityJITConfig",  // label: operation
-			g.entity.LabelScope(), // label: scope
-		).Inc()
-		if response != nil && response.StatusCode == http.StatusUnauthorized {
-			return nil, nil, fmt.Errorf("failed to get JIT config: %w", err)
-		}
-		return nil, nil, fmt.Errorf("failed to get JIT config: %w", err)
+		g.recordOpFailure("GetEntityJITConfig")
+		return nil, nil, fmt.Errorf("failed to get JIT config: %w", g.runnersDisabledError(parseError(response, err)))
 	}
 
 	defer func(run *github.Runner) {
@@ -573,12 +545,10 @@ func (g *githubClient) GetEntityJITConfig(ctx context.Context, instance string, 
 }
 
 func (g *githubClient) RateLimit(ctx context.Context) (*github.RateLimits, error) {
+	g.recordOp("GetRateLimit")
 	limits, resp, err := g.rateLimit.Get(ctx)
 	if err != nil {
-		metrics.GithubOperationFailedCount.WithLabelValues(
-			"GetRateLimit",        // label: operation
-			g.entity.LabelScope(), // label: scope
-		).Inc()
+		g.recordOpFailure("GetRateLimit")
 	}
 	if err := parseError(resp, err); err != nil {
 		return nil, fmt.Errorf("getting rate limit: %w", err)
@@ -594,22 +564,71 @@ func (g *githubClient) GithubBaseURL() *url.URL {
 	return g.cli.BaseURL
 }
 
+// LastRateLimit returns the most recent rate limit values this client has
+// observed on forge API responses. The second return value is false when no
+// rate limit information was observed yet, or when the forge does not report
+// rate limits (Gitea, or GHES with rate limiting disabled).
+func (g *githubClient) LastRateLimit() (params.GithubRateLimit, bool) {
+	g.mux.Lock()
+	defer g.mux.Unlock()
+
+	if g.limits.Limit == 0 {
+		return params.GithubRateLimit{}, false
+	}
+	return g.limits, true
+}
+
+// endpointLabel returns the value used for the "endpoint" metrics label:
+// the name of the endpoint the client's credentials belong to, falling
+// back to the credentials base URL.
+func (g *githubClient) endpointLabel() string {
+	endpoint := g.entity.Credentials.Endpoint.Name
+	if endpoint == "" {
+		endpoint = g.entity.Credentials.BaseURL
+	}
+	return endpoint
+}
+
+func (g *githubClient) recordOp(operation string) {
+	metrics.GithubOperationCount.WithLabelValues(
+		operation,             // label: operation
+		g.entity.LabelScope(), // label: scope
+		g.endpointLabel(),     // label: endpoint
+	).Inc()
+}
+
+func (g *githubClient) recordOpFailure(operation string) {
+	metrics.GithubOperationFailedCount.WithLabelValues(
+		operation,             // label: operation
+		g.entity.LabelScope(), // label: scope
+		g.endpointLabel(),     // label: endpoint
+	).Inc()
+}
+
 func (g *githubClient) recordLimits(core github.Rate) {
+	// A zero limit means the forge did not send rate limit headers (Gitea,
+	// or GHES with rate limiting disabled). There is nothing to record, and
+	// recording the zero value would read as an exhausted quota.
+	if core.Limit == 0 {
+		return
+	}
 	limit := params.GithubRateLimit{
 		Limit:     core.Limit,
 		Used:      core.Used,
 		Remaining: core.Remaining,
 		Reset:     core.Reset.Unix(),
 	}
+
+	g.mux.Lock()
+	g.limits = limit
+	g.mux.Unlock()
+
 	cache.SetCredentialsRateLimit(g.entity.Credentials.ID, limit)
 
 	// Record Prometheus metrics
 	credID := fmt.Sprintf("%d", g.entity.Credentials.ID)
 	credName := g.entity.Credentials.Name
-	endpoint := g.entity.Credentials.Endpoint.Name
-	if endpoint == "" {
-		endpoint = g.entity.Credentials.BaseURL
-	}
+	endpoint := g.endpointLabel()
 
 	labels := map[string]string{
 		"credential_name": credName,
@@ -639,12 +658,53 @@ func NewRateLimitClient(ctx context.Context, credentials params.ForgeCredentials
 	if err != nil {
 		return nil, fmt.Errorf("error fetching github client: %w", err)
 	}
-	cli := &githubClient{
-		rateLimit: ghClient.RateLimit,
-		cli:       ghClient,
+	cli := &rateLimitClient{
+		cli:         ghClient,
+		credentials: credentials,
 	}
 
 	return cli, nil
+}
+
+// rateLimitClient is a minimal, credential-scoped client used to query rate
+// limits outside the context of any entity. Besides the limits themselves,
+// it surfaces the token expiration the forge reports on the response.
+type rateLimitClient struct {
+	cli         *github.Client
+	credentials params.ForgeCredentials
+}
+
+func (r *rateLimitClient) endpointLabel() string {
+	endpoint := r.credentials.Endpoint.Name
+	if endpoint == "" {
+		endpoint = r.credentials.BaseURL
+	}
+	return endpoint
+}
+
+func (r *rateLimitClient) RateLimit(ctx context.Context) (*github.RateLimits, time.Time, error) {
+	metrics.GithubOperationCount.WithLabelValues(
+		"GetRateLimit",    // label: operation
+		"",                // label: scope
+		r.endpointLabel(), // label: endpoint
+	).Inc()
+	limits, resp, err := r.cli.RateLimit.Get(ctx)
+	if err != nil {
+		metrics.GithubOperationFailedCount.WithLabelValues(
+			"GetRateLimit",    // label: operation
+			"",                // label: scope
+			r.endpointLabel(), // label: endpoint
+		).Inc()
+	}
+	if err := parseError(resp, err); err != nil {
+		return nil, time.Time{}, fmt.Errorf("getting rate limit: %w", err)
+	}
+
+	var tokenExpiration time.Time
+	if resp != nil {
+		tokenExpiration = resp.TokenExpiration.Time
+	}
+	return limits, tokenExpiration, nil
 }
 
 func withGiteaURLs(client *github.Client, apiBaseURL string) (*github.Client, error) {

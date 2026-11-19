@@ -7,7 +7,7 @@
 # GitHub Actions Runner Manager (GARM)
 
 [![Go Tests](https://github.com/cloudbase/garm/actions/workflows/go-tests.yml/badge.svg)](https://github.com/cloudbase/garm/actions/workflows/go-tests.yml)
-[![slack](https://img.shields.io/badge/slack-garm-brightgreen.svg?logo=slack)](https://communityinviter.com/apps/garm-hq/garm)
+[![slack](https://img.shields.io/badge/slack-garm-brightgreen.svg?logo=slack)](https://inviter.co/garm)
 
 GARM is an open-source, self-hosted runner manager for [GitHub Actions](https://docs.github.com/en/actions/hosting-your-own-runners/about-self-hosted-runners) and [Gitea Actions](https://github.com/go-gitea/gitea/). It automatically creates, scales, and destroys ephemeral runner instances across multiple clouds and infrastructure providers from a single controller.
 
@@ -54,6 +54,8 @@ Pick the quickstart that matches your setup:
 
 For Kubernetes deployments, see the [GARM operator](https://github.com/mercedes-benz/garm-operator/). To build from source, see [Building from Source](/doc/building-from-source.md).
 
+If you get stuck, the **[FAQ](/doc/faq.md)** covers the most common problems: webhooks that don't fire, GHES quirks, stuck runners, pools that won't scale and more.
+
 ## Documentation
 
 Full documentation lives in the [doc/](/doc/README.md) directory:
@@ -92,4 +94,4 @@ Providers are external executables that GARM calls to manage runner lifecycle in
 
 ## Community
 
-Whether you're running into issues or just want to drop by and say "hi", feel free to [join us on Slack](https://communityinviter.com/apps/garm-hq/garm).
+Whether you're running into issues or just want to drop by and say "hi", feel free to [join us on Slack](https://inviter.co/garm).

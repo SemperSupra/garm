@@ -7,7 +7,7 @@
 	import { eagerCacheManager } from '$lib/stores/eager-cache.js';
 	import { toastStore } from '$lib/stores/toast.js';
 	import { extractAPIError } from '$lib/utils/apiError';
-	import { getForgeIcon } from '$lib/utils/common.js';
+	import { getForgeIcon, validateReservePercentage } from '$lib/utils/common.js';
 
 	const AuthType = { PAT: 'pat', APP: 'app' } as const;
 
@@ -40,7 +40,9 @@
 		oauth2_token: '',
 		app_id: '',
 		installation_id: '',
-		private_key_bytes: ''
+		private_key_bytes: '',
+		reserve_usage_enabled: false,
+		reserve_usage_percentage: 0
 	};
 
 	$: isFormValid = (() => {
@@ -72,6 +74,11 @@
 	});
 
 	async function handleCreate() {
+		const reserveError = validateReservePercentage(formData.reserve_usage_percentage);
+		if (reserveError) {
+			error = reserveError;
+			return;
+		}
 		creating = true;
 		error = '';
 		try {
@@ -80,7 +87,9 @@
 					name: formData.name.trim(),
 					description: formData.description.trim(),
 					endpoint: endpointName,
-					auth_type: selectedAuthType
+					auth_type: selectedAuthType,
+					reserve_usage_enabled: formData.reserve_usage_enabled,
+					reserve_usage_percentage: formData.reserve_usage_percentage
 				};
 				if (selectedAuthType === AuthType.PAT) {
 					githubParams.pat = { oauth2_token: formData.oauth2_token.trim() };

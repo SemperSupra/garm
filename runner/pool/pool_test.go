@@ -103,7 +103,7 @@ func (s *PoolStressTestSuite) SetupTest() {
 	cache.SetEntity(entity)
 	cache.SetEntityPool(entity.ID, pool)
 
-	s.controllerInfo, err = db.InitController()
+	s.controllerInfo, err = db.InitController(context.Background())
 	s.Require().NoError(err)
 
 	backoff, err := locking.NewInstanceDeleteBackoff(context.Background())
@@ -117,6 +117,7 @@ func (s *PoolStressTestSuite) SetupTest() {
 		controllerInfo:   s.controllerInfo,
 		providers:        map[string]common.Provider{"test-provider": s.providerMock},
 		jobs:             make(map[int64]params.Job),
+		jobTombstones:    make(map[int64]time.Time),
 		checkedJobs:      make(map[int64]time.Time),
 		quit:             make(chan struct{}),
 		consumer:         &garmTesting.MockConsumer{},

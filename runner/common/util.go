@@ -17,6 +17,7 @@ package common
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/google/go-github/v84/github"
 
@@ -41,10 +42,21 @@ type GithubEntityOperations interface {
 	GetEntity() params.ForgeEntity
 	// GithubBaseURL returns the base URL for the github or GHES API.
 	GithubBaseURL() *url.URL
+	// LastRateLimit returns the most recent rate limit values the client
+	// observed on forge API responses. The second return value is false
+	// when no rate limit information was observed yet, or when the forge
+	// does not report rate limits (Gitea, or GHES with rate limiting
+	// disabled).
+	LastRateLimit() (params.GithubRateLimit, bool)
 }
 
 type RateLimitClient interface {
-	RateLimit(ctx context.Context) (*github.RateLimits, error)
+	// RateLimit returns the current rate limits for the credential the
+	// client was created with. The returned time is the token expiration
+	// reported by the forge on the response; it is the zero value when the
+	// token was created without an expiration or the forge does not report
+	// one.
+	RateLimit(ctx context.Context) (*github.RateLimits, time.Time, error)
 }
 
 // GithubClient that describes the minimum list of functions we need to interact with github.

@@ -66,11 +66,15 @@ build-webui: ## Build GARM web UI (for local development)
 	cp -r webapp/build/* webapp/assets/
 
 .PHONY: generate
+# GOEXPERIMENT=nojsonv2: go 1.27 aliases json.RawMessage to jsontext.Value,
+# which go-swagger no longer recognizes as a special case. It falls back to
+# modeling the underlying []byte as an array of uint8 instead of an opaque
+# JSON object, breaking ExtraSpecs typing in the generated clients.
 generate: ## Run go generate after checking required tools are in PATH
 	@echo Checking required tools...
 	@which openapi-generator-cli > /dev/null || (echo "Error: openapi-generator-cli not found in PATH" && exit 1)
 	@echo Running go generate
-	@$(GO) generate ./...
+	@GOEXPERIMENT=nojsonv2 $(GO) generate ./...
 
 test: verify go-test ## Run tests
 
@@ -82,11 +86,11 @@ release: build-static create-release-files ## Create a release
 
 ##@ Lint / Verify
 .PHONY: lint
-lint: golangci-lint $(GOLANGCI_LINT) ## Run linting.
+lint: golangci-lint ## Run linting.
 	$(GOLANGCI_LINT) run -v --build-tags=testing,integration --timeout=5m $(GOLANGCI_LINT_EXTRA_ARGS)
 
 .PHONY: lint-fix
-lint-fix: golangci-lint $(GOLANGCI_LINT) ## Lint the codebase and run auto-fixers if supported by the linte
+lint-fix: golangci-lint ## Lint the codebase and run auto-fixers if supported by the linte
 	GOLANGCI_LINT_EXTRA_ARGS=--fix $(MAKE) lint
 
 verify-vendor: ## verify if all the go.mod/go.sum files are up-to-date
@@ -133,10 +137,9 @@ $(LOCALBIN):
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-GOLANGCI_LINT_VERSION ?= v2.10.1
+GOLANGCI_LINT_VERSION ?= v2.15.0
 
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary. If wrong version is installed, it will be overwritten.
-$(GOLANGCI_LINT): $(LOCALBIN)
+golangci-lint: $(LOCALBIN) ## Download golangci-lint locally if necessary. If wrong version is installed, it will be overwritten.
 	test -s $(LOCALBIN)/golangci-lint && $(LOCALBIN)/golangci-lint --version | grep -q $(GOLANGCI_LINT_VERSION) || \
 	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,13 +37,40 @@ import (
 // releaseIndexTTL is how long a cached release index is considered fresh.
 const releaseIndexTTL = 24 * time.Hour
 
-// fetchURL retrieves the body of a URL, bounded by the request context.
-func fetchURL(ctx context.Context, uri string) ([]byte, error) {
+// indexFetchTimeout bounds the entire fetch of a release index or single
+// release document. These are small JSON payloads; anything taking longer
+// than this is a stuck endpoint.
+const indexFetchTimeout = 60 * time.Second
+
+// syncHTTPClient is used for all release index fetches and asset downloads.
+// There is deliberately no overall client timeout — asset downloads can be
+// large, but connection establishment, TLS and time-to-first-response-byte
+// are all bounded so a dead endpoint cannot hang a request indefinitely.
+var syncHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
+// fetchURL retrieves the body of a URL, bounded by the request context. The
+// client is a parameter because an endpoint tools metadata URL may need to
+// trust a CA the system trust store does not carry. Callers with no such
+// need pass syncHTTPClient.
+func fetchURL(ctx context.Context, client *http.Client, uri string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, indexFetchTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for %s: %w", uri, err)
 	}
-	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- the releases URL is an operator-configured controller setting
+	resp, err := client.Do(req) // #nosec G704 -- the releases URL is an operator-configured controller setting
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL %s: %w", uri, err)
 	}
@@ -62,7 +90,7 @@ func fetchURL(ctx context.Context, uri string) ([]byte, error) {
 // releases URL is validated when it is configured on the controller, so
 // anything else is treated as an error here.
 func fetchReleaseIndex(ctx context.Context, releasesEndpoint string) (garmUtil.GitHubReleases, error) {
-	data, err := fetchURL(ctx, releasesEndpoint)
+	data, err := fetchURL(ctx, syncHTTPClient, releasesEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +110,7 @@ func fetchReleaseByTag(ctx context.Context, releasesEndpoint, tag string) (garmU
 	if err != nil {
 		return garmUtil.GitHubRelease{}, fmt.Errorf("failed to build tag URL for %s: %w", tag, err)
 	}
-	data, err := fetchURL(ctx, tagURL)
+	data, err := fetchURL(ctx, syncHTTPClient, tagURL)
 	if err != nil {
 		return garmUtil.GitHubRelease{}, err
 	}
@@ -100,6 +128,12 @@ type garmToolsSync struct {
 	consumerID       string
 	consumer         common.Consumer
 
+	// reconcileCh feeds reconcileLoop, the only goroutine that runs
+	// reconcile. Capacity 1 with latest-wins semantics: a trigger arriving
+	// while a reconcile is in flight replaces any queued one, so bursts
+	// coalesce into a single run with the newest controller info.
+	reconcileCh chan params.ControllerInfo
+
 	mux     sync.Mutex
 	running bool
 	quit    chan struct{}
@@ -115,6 +149,7 @@ func newGARMToolsSync(ctx context.Context, store common.Store, garmToolsManager 
 		store:            store,
 		consumerID:       consumerID,
 		garmToolsManager: garmToolsManager,
+		reconcileCh:      make(chan params.ControllerInfo, 1),
 		quit:             make(chan struct{}),
 	}
 }
@@ -139,6 +174,7 @@ func (g *garmToolsSync) Start() error {
 	g.running = true
 	g.quit = make(chan struct{})
 	go g.loop()
+	go g.reconcileLoop()
 	return nil
 }
 
@@ -182,7 +218,7 @@ func (g *garmToolsSync) reconcileLatest(ctrlInfo params.ControllerInfo) error {
 		return err
 	}
 
-	latest, ok := garmUtil.LatestAgentRelease(index.Releases)
+	latest, ok := garmUtil.LatestRelease(index.Releases)
 	if !ok {
 		return fmt.Errorf("no usable garm-agent release found at %s", ctrlInfo.GARMAgentReleasesURL)
 	}
@@ -298,7 +334,7 @@ func (g *garmToolsSync) persistIndex(index garmUtil.AgentReleaseIndex) error {
 	if err != nil {
 		return err
 	}
-	if err := g.store.UpdateCachedGARMAgentReleases(data, time.Now()); err != nil {
+	if err := g.store.UpdateCachedGARMAgentReleases(g.ctx, data, time.Now()); err != nil {
 		return fmt.Errorf("failed to update cached release index: %w", err)
 	}
 	slog.InfoContext(g.ctx, "updated GARM agent release index",
@@ -331,7 +367,7 @@ func (g *garmToolsSync) resolvePinned(index garmUtil.AgentReleaseIndex, pin stri
 		return byTag, nil
 	}
 
-	latest, ok := garmUtil.LatestAgentRelease(index.Releases)
+	latest, ok := garmUtil.LatestRelease(index.Releases)
 	if !ok {
 		return garmUtil.GitHubRelease{}, fmt.Errorf("pinned garm-agent version %q not found and no releases exist at %s", pin, index.SourceURL)
 	}
@@ -358,7 +394,7 @@ func (g *garmToolsSync) ensureToolsSynced(release garmUtil.GitHubRelease, origin
 	manual := make(map[string]bool)
 	syncedVersion := make(map[string]string)
 	for _, tool := range existing {
-		key := string(tool.OSType) + "/" + string(tool.OSArch)
+		key := tool.Platform()
 		if tool.Origin == "manual" {
 			manual[key] = true
 			continue
@@ -441,7 +477,7 @@ func (g *garmToolsSync) downloadAssetToTempFile(asset garmUtil.GitHubReleaseAsse
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for asset %s: %w", asset.Name, err)
 	}
-	resp, err := http.DefaultClient.Do(req) // #nosec G704 -- asset URLs come from the operator-configured releases endpoint
+	resp, err := syncHTTPClient.Do(req) // #nosec G704 -- asset URLs come from the operator-configured releases endpoint
 	if err != nil {
 		return nil, fmt.Errorf("failed to download asset %s: %w", asset.Name, err)
 	}
@@ -469,6 +505,51 @@ func (g *garmToolsSync) downloadAssetToTempFile(asset garmUtil.GitHubReleaseAsse
 	return tmpFile, nil
 }
 
+// triggerReconcile queues a reconcile for reconcileLoop without ever
+// blocking the caller. If a trigger is already queued, it is replaced so the
+// newest controller info wins. Every select has a default, so this is
+// non-blocking by construction, regardless of how many goroutines call it.
+func (g *garmToolsSync) triggerReconcile(ctrlInfo params.ControllerInfo) {
+	select {
+	case g.reconcileCh <- ctrlInfo:
+		return
+	default:
+	}
+	// Channel full: evict the stale queued trigger and try once more.
+	select {
+	case <-g.reconcileCh:
+	default:
+		// The queued trigger was already consumed by the reconcile loop
+		// after our first send failed.
+	}
+	select {
+	case g.reconcileCh <- ctrlInfo:
+	default:
+		// Another trigger was queued between our evict and this send. That
+		// can only happen with a concurrent caller; a reconcile will run
+		// either way, and the hourly tick covers any state it missed.
+	}
+}
+
+// reconcileLoop is the only goroutine that runs reconcile. Reconciliation
+// involves network fetches and asset downloads which can take a long time;
+// running it here keeps loop() draining the watcher consumer, and a single
+// runner guarantees no two reconciles overlap.
+func (g *garmToolsSync) reconcileLoop() {
+	for {
+		select {
+		case <-g.quit:
+			return
+		case <-g.ctx.Done():
+			return
+		case ctrlInfo := <-g.reconcileCh:
+			if err := g.reconcile(ctrlInfo); err != nil {
+				slog.ErrorContext(g.ctx, "failed to sync GARM agent tools", "error", err)
+			}
+		}
+	}
+}
+
 func (g *garmToolsSync) loop() {
 	defer g.Stop()
 
@@ -490,14 +571,10 @@ func (g *garmToolsSync) loop() {
 			return
 		case <-initialSync.C:
 			// Initial sync after startup delay (fires once)
-			if err := g.reconcile(garmCache.ControllerInfo()); err != nil {
-				slog.ErrorContext(g.ctx, "failed initial sync of GARM agent tools", "error", err)
-			}
+			g.triggerReconcile(garmCache.ControllerInfo())
 			initialSync.Stop()
 		case <-ticker.C:
-			if err := g.reconcile(garmCache.ControllerInfo()); err != nil {
-				slog.ErrorContext(g.ctx, "failed to sync GARM agent tools", "error", err)
-			}
+			g.triggerReconcile(garmCache.ControllerInfo())
 		case event, ok := <-g.consumer.Watch():
 			if !ok {
 				slog.InfoContext(g.ctx, "consumer channel closed")
@@ -512,10 +589,10 @@ func (g *garmToolsSync) loop() {
 	}
 }
 
-// handleControllerUpdate reconciles after controller info changes. It runs
-// even when tools sync is disabled: the cached release index feeds the
-// metadata service (which serves upstream URLs when sync is off), so changes
-// to the releases URL or the pinned version must be reflected in it.
+// handleControllerUpdate queues a reconcile after controller info changes.
+// It runs even when tools sync is disabled: the cached release index feeds
+// the metadata service (which serves upstream URLs when sync is off), so
+// changes to the releases URL or the pinned version must be reflected in it.
 // Reconciliation converges to a no-op when everything already matches.
 //
 // The event payload is used directly rather than the in-memory cache: the
@@ -527,7 +604,5 @@ func (g *garmToolsSync) handleControllerUpdate(event common.ChangePayload) {
 		slog.WarnContext(g.ctx, "invalid payload type for controller update event")
 		return
 	}
-	if err := g.reconcile(ctrlInfo); err != nil {
-		slog.ErrorContext(g.ctx, "failed to sync GARM agent tools after controller update", "error", err)
-	}
+	g.triggerReconcile(ctrlInfo)
 }

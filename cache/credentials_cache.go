@@ -14,6 +14,8 @@
 package cache
 
 import (
+	"time"
+
 	"github.com/cloudbase/garm/params"
 )
 
@@ -44,6 +46,11 @@ func (g *credentialCache) UpdateCredentialsUsingEndpoint(ep params.ForgeEndpoint
 		for _, creds := range cache {
 			if creds.Endpoint.Name == ep.Name {
 				creds.Endpoint = ep
+				// CABundle is a flattened copy of the endpoint bundle, made
+				// when the credentials were loaded. Leaving it behind means
+				// a rotated CA never reaches the clients built from these
+				// credentials.
+				creds.CABundle = ep.CACertBundle
 				cache[creds.ID] = creds
 				updated = append(updated, creds)
 			}
@@ -116,6 +123,59 @@ func GetAllGiteaCredentialsAsMap() map[uint]params.ForgeCredentials {
 	return giteaCredentialsCache.AsMap()
 }
 
+// UpdateCredentialsUsingEndpoint refreshes the endpoint embedded in every
+// cached credential that belongs to it. Endpoint names are unique across
+// forge types, so a name matches credentials in at most one of the caches.
 func UpdateCredentialsUsingEndpoint(ep params.ForgeEndpoint) {
+	credentialsCache.UpdateCredentialsUsingEndpoint(ep)
 	giteaCredentialsCache.UpdateCredentialsUsingEndpoint(ep)
+}
+
+// GetForgeCredentials returns the cached credentials with the given ID for
+// the specified forge type. Unlike the copies workers hold on their entities,
+// the cached credentials carry the most recently observed rate limit values.
+func GetForgeCredentials(forgeType params.EndpointType, id uint) (params.ForgeCredentials, bool) {
+	switch forgeType {
+	case params.GithubEndpointType:
+		return GetGithubCredentials(id)
+	case params.GiteaEndpointType:
+		return GetGiteaCredentials(id)
+	}
+	return params.ForgeCredentials{}, false
+}
+
+// entityCredentials resolves the freshest credentials for an entity: the
+// entity cache tracks credential swaps, and the credentials cache carries
+// the most recently observed rate limit values. Workers hold set-once
+// copies of both, so rate limit checks must go through here.
+func entityCredentials(entityID string) (params.ForgeCredentials, bool) {
+	entity, ok := GetEntity(entityID)
+	if !ok {
+		return params.ForgeCredentials{}, false
+	}
+	return GetForgeCredentials(entity.Credentials.ForgeType, entity.Credentials.ID)
+}
+
+// EntityRateLimitReached reports whether the credentials currently assigned
+// to the given entity should be considered rate limited for normal
+// (non-critical) operations, and when the quota resets. Entities or
+// credentials missing from the cache are never limited.
+func EntityRateLimitReached(entityID string) (bool, time.Time) {
+	creds, ok := entityCredentials(entityID)
+	if !ok {
+		return false, time.Time{}
+	}
+	return creds.RateLimitReached()
+}
+
+// EntityRateLimitExhausted reports whether the quota of the credentials
+// currently assigned to the given entity is fully spent, meaning even
+// critical operations cannot succeed, and when it resets. Entities or
+// credentials missing from the cache are never limited.
+func EntityRateLimitExhausted(entityID string) (bool, time.Time) {
+	creds, ok := entityCredentials(entityID)
+	if !ok {
+		return false, time.Time{}
+	}
+	return creds.CriticalRateLimitReached()
 }

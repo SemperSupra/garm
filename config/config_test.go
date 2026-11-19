@@ -56,15 +56,6 @@ func getDefaultAPIServerConfig() APIServer {
 	}
 }
 
-func getMySQLDefaultConfig() MySQL {
-	return MySQL{
-		Username:     "test",
-		Password:     "test",
-		Hostname:     "127.0.0.1",
-		DatabaseName: "garm",
-	}
-}
-
 func getPostgresDefaultConfig() PostgreSQL {
 	return PostgreSQL{
 		Username: "test",
@@ -351,24 +342,6 @@ func TestDatabaseConfig(t *testing.T) {
 			errString: "validating sqlite3 config: no valid db_file was specified",
 		},
 		{
-			name: "mysql backend is misconfigured",
-			cfg: Database{
-				DbBackend:  MySQLBackend,
-				MySQL:      MySQL{},
-				Passphrase: cfg.Passphrase,
-			},
-			errString: "validating mysql config: database, username, password, hostname are mandatory parameters for the database section",
-		},
-		{
-			name: "mysql backend is configured and valid",
-			cfg: Database{
-				DbBackend:  MySQLBackend,
-				MySQL:      getMySQLDefaultConfig(),
-				Passphrase: cfg.Passphrase,
-			},
-			errString: "",
-		},
-		{
 			name: "postgresql backend is misconfigured",
 			cfg: Database{
 				DbBackend:  PostgreSQLBackend,
@@ -409,34 +382,25 @@ func TestGormParams(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	cfg := getDefaultDatabaseConfig(dir)
 
-	dbType, uri, err := cfg.GormParams()
+	dbType, uri, err := cfg.GormParams(ConnPurposeRuntime)
 	require.Nil(t, err)
 	require.Equal(t, SQLiteBackend, dbType)
 	require.Equal(t, filepath.Join(dir, "garm.db?_journal_mode=WAL&_foreign_keys=ON&_txlock=immediate&_auto_vacuum=incremental"), uri)
 
 	cfg.SQLite.BusyTimeoutSeconds = 5
-	dbType, uri, err = cfg.GormParams()
+	dbType, uri, err = cfg.GormParams(ConnPurposeRuntime)
 	require.Nil(t, err)
 	require.Equal(t, SQLiteBackend, dbType)
 	require.Equal(t, filepath.Join(dir, "garm.db?_journal_mode=WAL&_foreign_keys=ON&_txlock=immediate&_auto_vacuum=incremental&_busy_timeout=5000"), uri)
 
-	cfg.DbBackend = MySQLBackend
-	cfg.MySQL = getMySQLDefaultConfig()
-	cfg.SQLite = SQLite{}
-
-	dbType, uri, err = cfg.GormParams()
-	require.Nil(t, err)
-	require.Equal(t, MySQLBackend, dbType)
-	require.Equal(t, "test:test@tcp(127.0.0.1)/garm?charset=utf8&parseTime=True&loc=Local&timeout=5s", uri)
-
 	cfg.DbBackend = PostgreSQLBackend
-	cfg.MySQL = MySQL{}
+	cfg.SQLite = SQLite{}
 	cfg.PostgreSQL = getPostgresDefaultConfig()
 
-	dbType, uri, err = cfg.GormParams()
+	dbType, uri, err = cfg.GormParams(ConnPurposeRuntime)
 	require.Nil(t, err)
 	require.Equal(t, PostgreSQLBackend, dbType)
-	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=disable", uri)
+	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=disable connect_timeout=10 statement_timeout=60000 lock_timeout=30000", uri)
 }
 
 func TestSQLiteConfig(t *testing.T) {
@@ -608,9 +572,50 @@ func TestPostgreSQLConfigDefaultsApplied(t *testing.T) {
 func TestPostgreSQLConnectionString(t *testing.T) {
 	cfg := getPostgresDefaultConfig()
 
-	connStr, err := cfg.ConnectionString()
+	connStr, err := cfg.ConnectionString(ConnPurposeRuntime)
+	require.Nil(t, err)
+	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=disable connect_timeout=10 statement_timeout=60000 lock_timeout=30000", connStr)
+}
+
+func TestPostgreSQLConnectionStringMigrationPurpose(t *testing.T) {
+	cfg := getPostgresDefaultConfig()
+
+	connStr, err := cfg.ConnectionString(ConnPurposeMigration)
+	require.Nil(t, err)
+	// Schema migrations must not inherit the runtime query timeouts. An
+	// AutoMigrate over a large table can legitimately outrun them, and being
+	// aborted half way through leaves the schema in an unknown state.
+	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=disable connect_timeout=10", connStr)
+}
+
+func TestPostgreSQLConnectionStringTimeoutsDisabled(t *testing.T) {
+	cfg := getPostgresDefaultConfig()
+	cfg.ConnectTimeoutSecs = -1
+	cfg.StatementTimeoutSecs = -1
+	cfg.LockTimeoutSecs = -1
+
+	connStr, err := cfg.ConnectionString(ConnPurposeRuntime)
 	require.Nil(t, err)
 	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=disable", connStr)
+}
+
+func TestPostgreSQLTimeoutValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*PostgreSQL)
+		field string
+	}{
+		{"connect timeout", func(p *PostgreSQL) { p.ConnectTimeoutSecs = -2 }, "connect_timeout_secs"},
+		{"statement timeout", func(p *PostgreSQL) { p.StatementTimeoutSecs = -2 }, "statement_timeout_secs"},
+		{"lock timeout", func(p *PostgreSQL) { p.LockTimeoutSecs = -2 }, "lock_timeout_secs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := getPostgresDefaultConfig()
+			tc.apply(&cfg)
+			_, err := cfg.ConnectionString(ConnPurposeRuntime)
+			require.ErrorContains(t, err, tc.field)
+		})
+	}
 }
 
 func TestPostgreSQLConnectionStringDefaultsApplied(t *testing.T) {
@@ -621,9 +626,9 @@ func TestPostgreSQLConnectionStringDefaultsApplied(t *testing.T) {
 		Database: "garm",
 	}
 
-	connStr, err := cfg.ConnectionString()
+	connStr, err := cfg.ConnectionString(ConnPurposeRuntime)
 	require.Nil(t, err)
-	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=prefer", connStr)
+	require.Equal(t, "host=127.0.0.1 port=5432 user=test password=test dbname=garm sslmode=prefer connect_timeout=10 statement_timeout=60000 lock_timeout=30000", connStr)
 }
 
 func TestPostgreSQLConnectionStringSpecialChars(t *testing.T) {
@@ -643,17 +648,17 @@ func TestPostgreSQLConnectionStringSpecialChars(t *testing.T) {
 		{
 			name:     "Password with space",
 			password: "my pass",
-			expected: "host=127.0.0.1 port=5432 user=test password='my pass' dbname=garm sslmode=disable",
+			expected: "host=127.0.0.1 port=5432 user=test password='my pass' dbname=garm sslmode=disable connect_timeout=10 statement_timeout=60000 lock_timeout=30000",
 		},
 		{
 			name:     "Password with single quote",
 			password: "pass'word",
-			expected: `host=127.0.0.1 port=5432 user=test password='pass\'word' dbname=garm sslmode=disable`,
+			expected: `host=127.0.0.1 port=5432 user=test password='pass\'word' dbname=garm sslmode=disable connect_timeout=10 statement_timeout=60000 lock_timeout=30000`,
 		},
 		{
 			name:     "Password with backslash",
 			password: `pass\word`,
-			expected: `host=127.0.0.1 port=5432 user=test password='pass\\word' dbname=garm sslmode=disable`,
+			expected: `host=127.0.0.1 port=5432 user=test password='pass\\word' dbname=garm sslmode=disable connect_timeout=10 statement_timeout=60000 lock_timeout=30000`,
 		},
 	}
 
@@ -661,7 +666,7 @@ func TestPostgreSQLConnectionStringSpecialChars(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := base
 			cfg.Password = tc.password
-			connStr, err := cfg.ConnectionString()
+			connStr, err := cfg.ConnectionString(ConnPurposeRuntime)
 			require.Nil(t, err)
 			require.Equal(t, tc.expected, connStr)
 		})
@@ -750,12 +755,12 @@ func TestNewConfig(t *testing.T) {
 	require.Equal(t, "0.0.0.0", cfg.APIServer.Bind)
 	require.Equal(t, 9998, cfg.APIServer.Port)
 	require.Equal(t, false, cfg.APIServer.UseTLS)
-	require.Equal(t, DBBackendType("mysql"), cfg.Database.DbBackend)
+	require.Equal(t, DBBackendType("postgresql"), cfg.Database.DbBackend)
 	require.Equal(t, "bocyasicgatEtenOubwonIbsudNutDom", cfg.Database.Passphrase)
-	require.Equal(t, "test", cfg.Database.MySQL.Username)
-	require.Equal(t, "test", cfg.Database.MySQL.Password)
-	require.Equal(t, "127.0.0.1", cfg.Database.MySQL.Hostname)
-	require.Equal(t, "garm", cfg.Database.MySQL.DatabaseName)
+	require.Equal(t, "test", cfg.Database.PostgreSQL.Username)
+	require.Equal(t, "test", cfg.Database.PostgreSQL.Password)
+	require.Equal(t, "127.0.0.1", cfg.Database.PostgreSQL.Hostname)
+	require.Equal(t, "garm", cfg.Database.PostgreSQL.Database)
 	require.Equal(t, "bocyasicgatEtenOubwonIbsudNutDom", cfg.JWTAuth.Secret)
 	require.Equal(t, timeToLive("48h"), cfg.JWTAuth.TimeToLive)
 }

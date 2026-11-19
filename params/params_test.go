@@ -213,7 +213,6 @@ func TestUpdateControllerParamsValidateAgentVersion(t *testing.T) {
 	}
 }
 
-
 func TestScaleSetCreateCircuit(t *testing.T) {
 	scaleSet := ScaleSet{}
 	if got := scaleSet.CreateAttemptLimit(); got != 5 {
@@ -231,5 +230,33 @@ func TestScaleSetCreateCircuit(t *testing.T) {
 	scaleSet.CreateFailures = 2
 	if !scaleSet.CreateCircuitOpen() {
 		t.Fatal("circuit did not open at configured limit")
+	}
+}
+
+func TestScaleSetHasRequiredLabels(t *testing.T) {
+	scaleSet := ScaleSet{
+		Name: "ubuntu-noble",
+		Tags: []Tag{{Name: "gpu"}},
+	}
+
+	cases := []struct {
+		name   string
+		labels []string
+		want   bool
+	}{
+		{"name alone", []string{"ubuntu-noble"}, true},
+		{"case insensitive", []string{"Ubuntu-Noble"}, true},
+		{"name plus tag", []string{"ubuntu-noble", "gpu"}, true},
+		{"unknown label", []string{"ubuntu-noble", "arm64"}, false},
+		{"different name", []string{"ubuntu-jammy"}, false},
+		{"empty set", nil, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scaleSet.HasRequiredLabels(tc.labels); got != tc.want {
+				t.Errorf("HasRequiredLabels(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
 	}
 }

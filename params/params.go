@@ -790,6 +790,26 @@ func (p ScaleSet) GitHubLabels() []Label {
 	return labels
 }
 
+// HasRequiredLabels returns true when every label in set is satisfied by
+// the labels the scale set registers with GitHub, the name plus tags. A
+// job requesting such a label set will be routed to the scale set.
+func (p ScaleSet) HasRequiredLabels(set []string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	asMap := map[string]struct{}{strings.ToLower(p.Name): {}}
+	for _, t := range p.Tags {
+		asMap[strings.ToLower(t.Name)] = struct{}{}
+	}
+
+	for _, l := range set {
+		if _, ok := asMap[strings.ToLower(l)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (p ScaleSet) BelongsTo(entity ForgeEntity) bool {
 	switch p.ScaleSetType() {
 	case ForgeEntityTypeRepository:
@@ -1209,7 +1229,8 @@ type ControllerInfo struct {
 	// GARM will ignore the job until the job's age is greater than this value. When using
 	// the min_idle_runners feature of a pool, this gives enough time for potential idle
 	// runners to pick up the job before GARM attempts to allocate a new runner, thus avoiding
-	// the need to potentially scale down runners later.
+	// the need to potentially scale down runners later. When set to 0, pool managers also
+	// react to queued webhooks immediately instead of on their next poll.
 	MinimumJobAgeBackoff uint `json:"minimum_job_age_backoff,omitempty"`
 	// Version is the version of the GARM controller.
 	Version string `json:"version,omitempty"`
@@ -1299,6 +1320,16 @@ type ForgeCredentials struct {
 
 	ForgeType EndpointType `json:"forge_type,omitempty"`
 
+	// ReserveUsageEnabled toggles whether or not to allocate a certain
+	// percentage of the available rate limit to critical operations such
+	// as delete operations for runners that have finished their jobs.
+	ReserveUsageEnabled bool `json:"reserve_usage_enabled,omitempty"`
+	// ReserveUsagePercentage is the percentage of available rate limit reserved
+	// for critical operations. Setting this value too high will negatively impact
+	// normal operations, so it is capped at 50%. A value between 5% and 20%
+	// should be safe on most setups. Adjust this based on your usage patterns.
+	ReserveUsagePercentage int `json:"reserve_usage_percentage,omitempty"`
+
 	Repositories  []Repository     `json:"repositories,omitempty"`
 	Organizations []Organization   `json:"organizations,omitempty"`
 	Enterprises   []Enterprise     `json:"enterprises,omitempty"`
@@ -1315,14 +1346,98 @@ func (g ForgeCredentials) GetID() uint {
 	return g.ID
 }
 
-func (g ForgeCredentials) GetHTTPClient(ctx context.Context) (*http.Client, error) {
-	var roots *x509.CertPool
-	if g.CABundle != nil {
+// reserveThreshold returns the number of API calls held in reserve for
+// critical operations (such as removing runners that finished their jobs).
+// Zero when usage reservation is disabled or no rate limit was observed.
+func (g ForgeCredentials) reserveThreshold() int {
+	if !g.ReserveUsageEnabled || g.RateLimit == nil {
+		return 0
+	}
+	return g.RateLimit.Limit * g.ReserveUsagePercentage / 100
+}
+
+// rateLimitReached reports whether the remaining quota has dropped to or
+// below the given threshold, and when the quota resets. The reset time is
+// returned whenever rate limit info was recorded, regardless of the verdict.
+// It is the zero time only when no info is available (Gitea, GHES with rate
+// limiting disabled, or no forge response observed yet). When no rate limits
+// are available, the credentials are considered unlimited. A quota whose
+// reset time has passed is treated as refreshed, even if we have not yet
+// observed a fresh response confirming it, otherwise a controller that
+// stopped making API calls due to the limit would never notice the reset.
+func (g ForgeCredentials) rateLimitReached(threshold int) (bool, time.Time) {
+	if g.RateLimit == nil || g.RateLimit.Limit == 0 {
+		return false, time.Time{}
+	}
+	resetAt := g.RateLimit.ResetAt()
+	if !time.Now().Before(resetAt) {
+		return false, resetAt
+	}
+	return g.RateLimit.Remaining <= threshold, resetAt
+}
+
+// RateLimitReached reports whether these credentials should be considered
+// rate limited for normal (non-critical) operations, and when the quota
+// resets. When usage reservation is enabled, normal operations are
+// considered limited once the remaining quota dips into the reserved
+// percentage, keeping the reserve available for critical operations.
+func (g ForgeCredentials) RateLimitReached() (bool, time.Time) {
+	return g.rateLimitReached(g.reserveThreshold())
+}
+
+// CriticalRateLimitReached reports whether even critical operations (such
+// as removing runners that finished their jobs) should back off, meaning
+// the quota is fully exhausted, and when it resets.
+func (g ForgeCredentials) CriticalRateLimitReached() (bool, time.Time) {
+	return g.rateLimitReached(0)
+}
+
+// CACertPool returns the cert pool to validate this endpoint against. A nil
+// pool means no bundle is set and the system trust store applies.
+//
+// The bundle widens the system trust store rather than replacing it. It
+// exists so that a forge serving a certificate signed by an internal CA can
+// be reached, not to pin the endpoint to that CA. Replacing the system roots
+// would also break every other host GARM reaches for this endpoint, such as
+// a public tools metadata URL.
+func (g ForgeCredentials) CACertPool() (*x509.CertPool, error) {
+	if g.CABundle == nil {
+		return nil, nil
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load system cert pool: %w", err)
+	}
+	if roots == nil {
+		// Not expected on any supported platform, but appending to a nil
+		// pool would panic.
 		roots = x509.NewCertPool()
-		ok := roots.AppendCertsFromPEM(g.CABundle)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse CA cert")
-		}
+	}
+	if ok := roots.AppendCertsFromPEM(g.CABundle); !ok {
+		return nil, fmt.Errorf("failed to parse CA cert")
+	}
+	return roots, nil
+}
+
+// GetBaseTransport returns the HTTP transport for talking to the forge
+// these credentials belong to. It trusts the credentials CA bundle and
+// runs HTTP/2 health checks. Requests multiplex over a small number of
+// HTTP/2 connections. When one dies silently (no FIN or RST reaches us),
+// requests on it hang until the kernel gives up retransmitting, which
+// takes around 15 minutes. The health checks send a PING frame on any
+// connection that received no frames for SendPingTimeout and close the
+// connection when the answer does not arrive within PingTimeout, failing
+// in-flight requests fast. A healthy peer answers PINGs even while it
+// holds a long poll open, so idle but live connections are unaffected.
+//
+// The transport carries no authentication. Callers that set their own
+// Authorization headers (like the scale set client) must use this and not
+// the client returned by GetHTTPClient, whose auth wrapper overwrites the
+// Authorization header on every request.
+func (g ForgeCredentials) GetBaseTransport() (*http.Transport, error) {
+	roots, err := g.CACertPool()
+	if err != nil {
+		return nil, fmt.Errorf("getting CA cert pool: %w", err)
 	}
 
 	dialer := &net.Dialer{
@@ -1330,17 +1445,92 @@ func (g ForgeCredentials) GetHTTPClient(ctx context.Context) (*http.Client, erro
 		KeepAlive: 30 * time.Second,
 	}
 
-	httpTransport := &http.Transport{
+	return &http.Transport{
 		Proxy:       http.ProxyFromEnvironment,
 		DialContext: dialer.DialContext,
 		TLSClientConfig: &tls.Config{
 			RootCAs:    roots,
 			MinVersion: tls.VersionTLS12,
 		},
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2: true,
+		HTTP2: &http.HTTP2Config{
+			SendPingTimeout: 30 * time.Second,
+			PingTimeout:     15 * time.Second,
+		},
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+	}, nil
+}
+
+// urlOrigin returns the scheme and host of rawURL, lowercased and with a
+// default port dropped so that "https://example.com" and
+// "https://example.com:443" compare equal. It returns the empty string when
+// the URL has no usable origin.
+func urlOrigin(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	return scheme + "://" + host
+}
+
+// ServesURL reports whether rawURL is served by the forge these credentials
+// authenticate against. The scheme and host must match one of the forge
+// URLs, so a plain HTTP look-alike of an HTTPS forge is not a match.
+func (g ForgeCredentials) ServesURL(rawURL string) bool {
+	origin := urlOrigin(rawURL)
+	if origin == "" {
+		return false
+	}
+
+	for _, base := range []string{g.APIBaseURL, g.UploadBaseURL, g.BaseURL} {
+		if forgeOrigin := urlOrigin(base); forgeOrigin != "" && forgeOrigin == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// HTTPClientForURL returns the client to use when fetching rawURL on behalf
+// of these credentials.
+//
+// A URL the forge itself serves gets the authenticated client, so the call
+// counts against the quota of the token instead of the much smaller
+// anonymous rate limit. Anything else gets an unauthenticated client, since
+// an operator supplied URL need not belong to the forge and the forge token
+// must not be sent to a third party. Either way the endpoint CA bundle is
+// trusted on top of the system trust store.
+func (g ForgeCredentials) HTTPClientForURL(ctx context.Context, rawURL string) (*http.Client, error) {
+	if g.ServesURL(rawURL) {
+		cli, err := g.GetHTTPClient(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("getting authenticated client: %w", err)
+		}
+		return cli, nil
+	}
+
+	transport, err := g.GetBaseTransport()
+	if err != nil {
+		return nil, fmt.Errorf("getting base transport: %w", err)
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
+func (g ForgeCredentials) GetHTTPClient(ctx context.Context) (*http.Client, error) {
+	httpTransport, err := g.GetBaseTransport()
+	if err != nil {
+		return nil, fmt.Errorf("getting base transport: %w", err)
 	}
 
 	var tc *http.Client
@@ -1439,8 +1629,6 @@ type Job struct {
 	ID int64 `json:"id,omitempty"`
 
 	WorkflowJobID int64 `json:"workflow_job_id,omitempty"`
-	// ScaleSetJobID is the job ID when generated for a scale set.
-	ScaleSetJobID string `json:"scaleset_job_id,omitempty"`
 	// RunID is the ID of the workflow run. A run may have multiple jobs.
 	RunID int64 `json:"run_id,omitempty"`
 	// Action is the specific activity that triggered the event.
@@ -1484,7 +1672,50 @@ type Job struct {
 	EnterpriseID    *uuid.UUID `json:"enterprise_id,omitempty"`
 	ForgeInstanceID *uuid.UUID `json:"forge_instance_id,omitempty"`
 
+	// PoolID is set when one of the pool's runners picks up the job.
+	PoolID *uuid.UUID `json:"pool_id,omitempty"`
+
 	LockedBy uuid.UUID `json:"locked_by,omitempty"`
+
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// ScaleSetJob is the informational record of a job GitHub routed to a
+// scale set. GitHub schedules these server side, so GARM never acts on
+// them. They exist so users can list the jobs a scale set handled and
+// see which runner serviced them.
+// swagger:model ScaleSetJob
+type ScaleSetJob struct {
+	ID uint `json:"id,omitempty"`
+
+	// ScaleSetJobID is the job ID assigned by the GitHub actions service.
+	ScaleSetJobID string `json:"scaleset_job_id,omitempty"`
+	// ScaleSetID is GARM's ID of the scale set that handled the job. It
+	// is zero for records migrated from older GARM versions, which never
+	// recorded the owning scale set.
+	ScaleSetID uint `json:"scaleset_id,omitempty"`
+
+	WorkflowRunID   int64    `json:"workflow_run_id,omitempty"`
+	RunnerRequestID int64    `json:"runner_request_id,omitempty"`
+	JobWorkflowRef  string   `json:"job_workflow_ref,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Status          string   `json:"status,omitempty"`
+	Result          string   `json:"result,omitempty"`
+	EventName       string   `json:"event_name,omitempty"`
+	RequestLabels   []string `json:"request_labels,omitempty"`
+	RepositoryName  string   `json:"repository_name,omitempty"`
+	RepositoryOwner string   `json:"repository_owner,omitempty"`
+	RunnerGroupName string   `json:"runner_group_name,omitempty"`
+	RunnerID        int64    `json:"runner_id,omitempty"`
+	RunnerName      string   `json:"runner_name,omitempty"`
+	WorkflowRunURL  string   `json:"workflow_run_url,omitempty"`
+
+	// Timestamps reported by GitHub for the job's routing funnel.
+	QueueTime          time.Time `json:"queue_time,omitempty"`
+	ScaleSetAssignTime time.Time `json:"scaleset_assign_time,omitempty"`
+	RunnerAssignTime   time.Time `json:"runner_assign_time,omitempty"`
+	FinishTime         time.Time `json:"finish_time,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
@@ -1517,6 +1748,30 @@ func (j Job) BelongsTo(entity ForgeEntity) bool {
 // swagger:model Jobs
 // used by swagger client generated code
 type Jobs []Job
+
+// swagger:model ScaleSetJobs
+// used by swagger client generated code
+type ScaleSetJobs []ScaleSetJob
+
+// swagger:model JobsPaginatedResponse
+type JobsPaginatedResponse = PaginatedResponse[Job]
+
+// swagger:model ScaleSetJobsPaginatedResponse
+type ScaleSetJobsPaginatedResponse = PaginatedResponse[ScaleSetJob]
+
+// ListJobsFilter narrows down and paginates job listings. The zero value
+// lists the first page of jobs that are not yet completed.
+type ListJobsFilter struct {
+	Page     uint64
+	PageSize uint64
+	// IncludeCompleted also lists jobs that already finished. Without it
+	// only queued and in progress jobs are returned.
+	IncludeCompleted bool
+	// Since and Until bound the listing to jobs recorded inside the given
+	// window. A zero value leaves that end of the window open.
+	Since time.Time
+	Until time.Time
+}
 
 // swagger:model InstallWebhookParams
 type InstallWebhookParams struct {
@@ -1818,6 +2073,11 @@ type GARMAgentTool struct {
 	// "upstream" means the tool is only available from the upstream
 	// cached release and has not been downloaded locally.
 	Source string `json:"source"`
+}
+
+// Platform returns the "os_type/os_arch" key this tool is indexed under.
+func (g GARMAgentTool) Platform() string {
+	return string(g.OSType) + "/" + string(g.OSArch)
 }
 
 // swagger:model GARMAgentToolsPaginatedResponse

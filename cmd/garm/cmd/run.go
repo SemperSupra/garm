@@ -29,6 +29,7 @@ import (
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/cloudbase/garm-provider-common/util"
@@ -49,6 +50,8 @@ import (
 	"github.com/cloudbase/garm/websocket"
 	"github.com/cloudbase/garm/workers/cache"
 	"github.com/cloudbase/garm/workers/entity"
+	jobsWorker "github.com/cloudbase/garm/workers/jobs"
+	metricsWorker "github.com/cloudbase/garm/workers/metrics"
 	"github.com/cloudbase/garm/workers/provider"
 	"github.com/cloudbase/garm/workers/websocket/agent"
 	wsMetrics "github.com/cloudbase/garm/workers/websocket/metrics"
@@ -67,6 +70,8 @@ type serverComponents struct {
 	agentHub       *agent.Hub
 	metricsHub     *wsMetrics.MetricsHub
 	cacheWorker    *cache.Worker
+	jobRetention   *jobsWorker.Worker
+	metricsWorker  *metricsWorker.Worker
 	providerWorker *provider.Provider
 	entityCtrl     *entity.Controller
 	runner         *runner.Runner
@@ -121,7 +126,7 @@ func initInfrastructure(ctx context.Context, cfg *config.Config, hub *websocket.
 		return nil, fmt.Errorf("creating database: %w", err)
 	}
 
-	controllerInfo, err := maybeInitController(db)
+	controllerInfo, err := maybeInitController(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +159,11 @@ func initInfrastructure(ctx context.Context, cfg *config.Config, hub *websocket.
 		return nil, fmt.Errorf("creating runner: %w", err)
 	}
 
+	jobRetention := jobsWorker.NewWorker(ctx, db)
+	if err := jobRetention.Start(); err != nil {
+		return nil, fmt.Errorf("starting job retention worker: %w", err)
+	}
+
 	cacheWorker := cache.NewWorker(ctx, db, rnr)
 	if err := cacheWorker.Start(); err != nil {
 		return nil, fmt.Errorf("starting cache worker: %w", err)
@@ -162,6 +172,17 @@ func initInfrastructure(ctx context.Context, cfg *config.Config, hub *websocket.
 	metricsHub := wsMetrics.NewMetricsHub(ctx)
 	if err := metricsHub.Start(); err != nil {
 		return nil, fmt.Errorf("starting metrics hub: %w", err)
+	}
+
+	// The metrics worker derives event-driven Prometheus metrics from
+	// database change events. It baselines from the cache, so it starts
+	// after the cache worker.
+	var mWorker *metricsWorker.Worker
+	if cfg.Metrics.Enable {
+		mWorker = metricsWorker.NewWorker(ctx)
+		if err := mWorker.Start(); err != nil {
+			return nil, fmt.Errorf("starting metrics worker: %w", err)
+		}
 	}
 
 	loadedProviders, err := providers.LoadProvidersFromConfig(ctx, *cfg, controllerInfo.ControllerID.String())
@@ -198,6 +219,8 @@ func initInfrastructure(ctx context.Context, cfg *config.Config, hub *websocket.
 		agentHub:       agentHub,
 		metricsHub:     metricsHub,
 		cacheWorker:    cacheWorker,
+		jobRetention:   jobRetention,
+		metricsWorker:  mWorker,
 		providerWorker: providerWorker,
 		entityCtrl:     entityCtrl,
 		runner:         rnr,
@@ -261,6 +284,9 @@ func buildHTTPServer(ctx context.Context, cfg *config.Config, comp *serverCompon
 		slog.InfoContext(ctx, "register metrics")
 		if err := metrics.RegisterMetrics(); err != nil {
 			return nil, nil, fmt.Errorf("registering metrics: %w", err)
+		}
+		if err := prometheus.Register(watcher.NewQueueDepthCollector()); err != nil {
+			return nil, nil, fmt.Errorf("registering watcher metrics collector: %w", err)
 		}
 
 		slog.InfoContext(ctx, "start metrics collection")
@@ -344,17 +370,27 @@ func shutdownComponents(comp *serverComponents) {
 
 	comp.metricsHub.Stop() //nolint
 
+	if comp.metricsWorker != nil {
+		if err := comp.metricsWorker.Stop(); err != nil {
+			slog.With(slog.Any("error", err)).Error("failed to stop metrics worker")
+		}
+	}
+
 	if err := comp.cacheWorker.Stop(); err != nil {
 		slog.With(slog.Any("error", err)).Error("failed to stop cache worker")
 	}
+
+	if err := comp.jobRetention.Stop(); err != nil {
+		slog.With(slog.Any("error", err)).Error("failed to stop job retention worker")
+	}
 }
 
-func maybeInitController(db dbCommon.Store) (params.ControllerInfo, error) {
-	if info, err := db.ControllerInfo(); err == nil {
+func maybeInitController(ctx context.Context, db dbCommon.Store) (params.ControllerInfo, error) {
+	if info, err := db.ControllerInfo(ctx); err == nil {
 		return info, nil
 	}
 
-	info, err := db.InitController()
+	info, err := db.InitController(ctx)
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("initializing controller: %w", err)
 	}

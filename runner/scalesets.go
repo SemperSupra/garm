@@ -52,7 +52,35 @@ func (r *Runner) GetScaleSetByID(ctx context.Context, scaleSet uint) (params.Sca
 	return set, nil
 }
 
-func (r *Runner) DeleteScaleSetByID(ctx context.Context, scaleSetID uint) error {
+// ListAllScaleSetJobs lists the whole scale set job ledger. Used by the
+// metrics collector, the API serves the filtered and paginated variant.
+func (r *Runner) ListAllScaleSetJobs(ctx context.Context) ([]params.ScaleSetJob, error) {
+	if !auth.IsAdmin(ctx) {
+		return nil, runnerErrors.ErrUnauthorized
+	}
+
+	jobs, err := r.store.ListAllScaleSetJobs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching scale set jobs: %w", err)
+	}
+	return jobs, nil
+}
+
+// ListScaleSetJobs lists the jobs handled by scale sets, filtered and
+// paginated. A zero scaleSetID lists jobs across all scale sets.
+func (r *Runner) ListScaleSetJobs(ctx context.Context, scaleSetID uint, filter params.ListJobsFilter) (params.ScaleSetJobsPaginatedResponse, error) {
+	if !auth.IsAdmin(ctx) {
+		return params.ScaleSetJobsPaginatedResponse{}, runnerErrors.ErrUnauthorized
+	}
+
+	jobs, err := r.store.ListScaleSetJobsPaginated(ctx, scaleSetID, filter)
+	if err != nil {
+		return params.ScaleSetJobsPaginatedResponse{}, fmt.Errorf("error fetching scale set jobs: %w", err)
+	}
+	return jobs, nil
+}
+
+func (r *Runner) DeleteScaleSetByID(ctx context.Context, scaleSetID uint, bypassGHErrors bool) error {
 	if !auth.IsAdmin(ctx) {
 		return runnerErrors.ErrUnauthorized
 	}
@@ -95,12 +123,11 @@ func (r *Runner) DeleteScaleSetByID(ctx context.Context, scaleSetID uint) error 
 
 	slog.DebugContext(ctx, "deleting scale set", "scale_set_id", scaleSet.ScaleSetID)
 	if err := scalesetCli.DeleteRunnerScaleSet(ctx, scaleSet.ScaleSetID); err != nil {
-		if !errors.Is(err, runnerErrors.ErrNotFound) {
-			slog.InfoContext(ctx, "scale set not found", "scale_set_id", scaleSet.ScaleSetID)
-			return nil
+		if !errors.Is(err, runnerErrors.ErrNotFound) && !bypassGHErrors {
+			slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to delete scale set from github")
+			return fmt.Errorf("error deleting scale set from github: %w", err)
 		}
-		slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to delete scale set from github")
-		return fmt.Errorf("error deleting scale set from github: %w", err)
+		slog.With(slog.Any("error", err)).WarnContext(ctx, "removing scale set despite github error", "scale_set_id", scaleSet.ScaleSetID)
 	}
 	if err := r.store.DeleteScaleSetByID(ctx, scaleSetID); err != nil {
 		return fmt.Errorf("error deleting scale set: %w", err)

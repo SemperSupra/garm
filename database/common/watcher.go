@@ -35,6 +35,7 @@ const (
 	GiteaCredentialsEntityType  DatabaseEntityType = "gitea_credentials"  // #nosec G101
 	GithubEndpointEntityType    DatabaseEntityType = "github_endpoint"
 	ScaleSetEntityType          DatabaseEntityType = "scaleset"
+	ScaleSetJobEntityType       DatabaseEntityType = "scaleset_job"
 	TemplateEntityType          DatabaseEntityType = "template"
 	FileObjectEntityType        DatabaseEntityType = "file_object"
 	ForgeInstanceEntityType     DatabaseEntityType = "forge_instance"
@@ -66,8 +67,18 @@ type Producer interface {
 	Close()
 }
 
+// WatcherMetrics holds a point-in-time snapshot of the watcher's internal
+// state, for consumption by the metrics layer.
+type WatcherMetrics struct {
+	// ConsumerQueueDepths maps each registered consumer ID to the number of
+	// events queued for it and not yet delivered.
+	ConsumerQueueDepths map[string]int
+}
+
 type Watcher interface {
 	RegisterProducer(ctx context.Context, ID string) (Producer, error)
 	RegisterConsumer(ctx context.Context, ID string, filters ...PayloadFilterFunc) (Consumer, error)
+	// Metrics returns a snapshot of the watcher's internal state.
+	Metrics() WatcherMetrics
 	Close()
 }

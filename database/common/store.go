@@ -130,6 +130,7 @@ type JobsStore interface {
 	ListEntityJobsByStatus(ctx context.Context, entityType params.ForgeEntityType, entityID string, status params.JobStatus) ([]params.Job, error)
 	ListJobsByStatus(ctx context.Context, status params.JobStatus) ([]params.Job, error)
 	ListAllJobs(ctx context.Context) ([]params.Job, error)
+	ListJobs(ctx context.Context, filter params.ListJobsFilter) (params.JobsPaginatedResponse, error)
 
 	GetJobByID(ctx context.Context, jobID int64) (params.Job, error)
 	DeleteJob(ctx context.Context, jobID int64) error
@@ -138,6 +139,19 @@ type JobsStore interface {
 	BreakLockJobIsQueued(ctx context.Context, jobID int64) error
 
 	DeleteInactionableJobs(ctx context.Context, olderThan time.Duration) error
+}
+
+// ScaleSetJobsStore manages the informational ledger of jobs GitHub routed
+// to scale sets. GARM records these as it sees them on each scale set's
+// message queue. Nothing acts on them.
+type ScaleSetJobsStore interface {
+	CreateOrUpdateScaleSetJob(ctx context.Context, job params.ScaleSetJob) (params.ScaleSetJob, error)
+	ListScaleSetJobs(ctx context.Context, scaleSetID uint) ([]params.ScaleSetJob, error)
+	ListAllScaleSetJobs(ctx context.Context) ([]params.ScaleSetJob, error)
+	// ListScaleSetJobsPaginated filters and paginates the scale set job
+	// ledger. A zero scaleSetID lists jobs across all scale sets.
+	ListScaleSetJobsPaginated(ctx context.Context, scaleSetID uint, filter params.ListJobsFilter) (params.ScaleSetJobsPaginatedResponse, error)
+	DeleteOldScaleSetJobs(ctx context.Context, olderThan time.Duration) error
 }
 
 type EntityPoolStore interface {
@@ -151,18 +165,18 @@ type EntityPoolStore interface {
 }
 
 type ControllerStore interface {
-	ControllerInfo() (params.ControllerInfo, error)
-	InitController() (params.ControllerInfo, error)
-	UpdateController(info params.UpdateControllerParams) (params.ControllerInfo, error)
-	HasEntitiesWithAgentModeEnabled() (bool, error)
-	UpdateCachedGARMAgentReleases(index []byte, fetchedAt time.Time) error
+	ControllerInfo(ctx context.Context) (params.ControllerInfo, error)
+	InitController(ctx context.Context) (params.ControllerInfo, error)
+	UpdateController(ctx context.Context, info params.UpdateControllerParams) (params.ControllerInfo, error)
+	HasEntitiesWithAgentModeEnabled(ctx context.Context) (bool, error)
+	UpdateCachedGARMAgentReleases(ctx context.Context, index []byte, fetchedAt time.Time) error
 }
 
 type ScaleSetsStore interface {
 	ListAllScaleSets(ctx context.Context) ([]params.ScaleSet, error)
-	CreateEntityScaleSet(_ context.Context, entity params.ForgeEntity, param params.CreateScaleSetParams) (scaleSet params.ScaleSet, err error)
-	ListEntityScaleSets(_ context.Context, entity params.ForgeEntity) ([]params.ScaleSet, error)
-	UpdateEntityScaleSet(_ context.Context, entity params.ForgeEntity, scaleSetID uint, param params.UpdateScaleSetParams, callback func(old, newSet params.ScaleSet) error) (updatedScaleSet params.ScaleSet, err error)
+	CreateEntityScaleSet(ctx context.Context, entity params.ForgeEntity, param params.CreateScaleSetParams) (scaleSet params.ScaleSet, err error)
+	ListEntityScaleSets(ctx context.Context, entity params.ForgeEntity) ([]params.ScaleSet, error)
+	UpdateEntityScaleSet(ctx context.Context, entity params.ForgeEntity, scaleSetID uint, param params.UpdateScaleSetParams, callback func(old, newSet params.ScaleSet) error) (updatedScaleSet params.ScaleSet, err error)
 	GetScaleSetByID(ctx context.Context, scaleSet uint) (params.ScaleSet, error)
 	DeleteScaleSetByID(ctx context.Context, scaleSetID uint) (err error)
 	SetScaleSetLastMessageID(ctx context.Context, scaleSetID uint, lastMessageID int64) error
@@ -172,16 +186,16 @@ type ScaleSetsStore interface {
 }
 
 type ScaleSetInstanceStore interface {
-	ListScaleSetInstances(_ context.Context, scalesetID uint, outdatedOnly bool) ([]params.Instance, error)
-	CreateScaleSetInstance(_ context.Context, scaleSetID uint, param params.CreateInstanceParams) (instance params.Instance, err error)
+	ListScaleSetInstances(ctx context.Context, scalesetID uint, outdatedOnly bool) ([]params.Instance, error)
+	CreateScaleSetInstance(ctx context.Context, scaleSetID uint, param params.CreateInstanceParams) (instance params.Instance, err error)
 }
 
 type GiteaEndpointStore interface {
-	CreateGiteaEndpoint(_ context.Context, param params.CreateGiteaEndpointParams) (ghEndpoint params.ForgeEndpoint, err error)
-	ListGiteaEndpoints(_ context.Context) ([]params.ForgeEndpoint, error)
-	DeleteGiteaEndpoint(_ context.Context, name string) (err error)
-	GetGiteaEndpoint(_ context.Context, name string) (params.ForgeEndpoint, error)
-	UpdateGiteaEndpoint(_ context.Context, name string, param params.UpdateGiteaEndpointParams) (ghEndpoint params.ForgeEndpoint, err error)
+	CreateGiteaEndpoint(ctx context.Context, param params.CreateGiteaEndpointParams) (ghEndpoint params.ForgeEndpoint, err error)
+	ListGiteaEndpoints(ctx context.Context) ([]params.ForgeEndpoint, error)
+	DeleteGiteaEndpoint(ctx context.Context, name string) (err error)
+	GetGiteaEndpoint(ctx context.Context, name string) (params.ForgeEndpoint, error)
+	UpdateGiteaEndpoint(ctx context.Context, name string, param params.UpdateGiteaEndpointParams) (ghEndpoint params.ForgeEndpoint, err error)
 }
 
 type GiteaCredentialsStore interface {
@@ -232,6 +246,7 @@ type Store interface {
 	UserStore
 	InstanceStore
 	JobsStore
+	ScaleSetJobsStore
 	GithubEndpointStore
 	GithubCredentialsStore
 	ControllerStore
@@ -244,9 +259,9 @@ type Store interface {
 	ProxyStore
 	FileObjectStore
 
-	ControllerInfo() (params.ControllerInfo, error)
-	InitController() (params.ControllerInfo, error)
-	GetForgeEntity(_ context.Context, entityType params.ForgeEntityType, entityID string) (params.ForgeEntity, error)
+	ControllerInfo(ctx context.Context) (params.ControllerInfo, error)
+	InitController(ctx context.Context) (params.ControllerInfo, error)
+	GetForgeEntity(ctx context.Context, entityType params.ForgeEntityType, entityID string) (params.ForgeEntity, error)
 	AddEntityEvent(ctx context.Context, entity params.ForgeEntity, event params.EventType, eventLevel params.EventLevel, statusMessage string, maxEvents int) error
 	SetEntityPoolManagerStatus(ctx context.Context, entity params.ForgeEntity, param params.PoolManagerStatus) error
 }

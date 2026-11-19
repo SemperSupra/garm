@@ -58,6 +58,12 @@ var (
 	scaleSetClearProxy             bool
 	scalesetEnableShell            bool
 	scalesetLabels                 string
+	scalesetJobsAll                bool
+	scalesetJobsPage               int64
+	scalesetJobsPageSize           int64
+	scalesetJobsSince              string
+	scalesetJobsUntil              string
+	scaleSetBypassGHErrors         bool
 )
 
 type scalesetPayloadGetter interface {
@@ -204,6 +210,7 @@ var scaleSetDeleteCmd = &cobra.Command{
 
 		deleteScaleSetReq := apiClientScaleSets.NewDeleteScaleSetParams()
 		deleteScaleSetReq.ScalesetID = args[0]
+		deleteScaleSetReq.BypassGHErrors = &scaleSetBypassGHErrors
 		if err := apiCli.Scalesets.DeleteScaleSet(deleteScaleSetReq, authToken); err != nil {
 			return err
 		}
@@ -468,6 +475,79 @@ var scalesetRunnerCmd = &cobra.Command{
 	Run:          nil,
 }
 
+var scalesetJobsCmd = &cobra.Command{
+	Use:          "job",
+	Short:        "Information about scale set jobs",
+	Long:         `Query information about jobs handled by scale sets.`,
+	SilenceUsage: true,
+	Run:          nil,
+}
+
+var scalesetJobsListCmd = &cobra.Command{
+	Use:          "list [scaleset-id]",
+	Aliases:      []string{"ls"},
+	Short:        "List scale set jobs",
+	Long:         `List jobs handled by scale sets. Pass a scale set ID to only list the jobs of that scale set. Only queued and in progress jobs are shown unless --all is set.`,
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
+	RunE: func(_ *cobra.Command, args []string) error {
+		if needsInit {
+			return errNeedsInitError
+		}
+
+		var jobs params.ScaleSetJobsPaginatedResponse
+		if len(args) == 1 {
+			listReq := apiClientScaleSets.NewListScaleSetJobsParams()
+			listReq.ScalesetID = args[0]
+			if err := applyJobListFlags(scalesetJobsAll, scalesetJobsPage, scalesetJobsPageSize, scalesetJobsSince, scalesetJobsUntil,
+				&listReq.All, &listReq.Page, &listReq.PageSize, &listReq.Since, &listReq.Until); err != nil {
+				return err
+			}
+			response, err := apiCli.Scalesets.ListScaleSetJobs(listReq, authToken)
+			if err != nil {
+				return err
+			}
+			jobs = response.Payload
+		} else {
+			listReq := apiClientScaleSets.NewListAllScaleSetJobsParams()
+			if err := applyJobListFlags(scalesetJobsAll, scalesetJobsPage, scalesetJobsPageSize, scalesetJobsSince, scalesetJobsUntil,
+				&listReq.All, &listReq.Page, &listReq.PageSize, &listReq.Since, &listReq.Until); err != nil {
+				return err
+			}
+			response, err := apiCli.Scalesets.ListAllScaleSetJobs(listReq, authToken)
+			if err != nil {
+				return err
+			}
+			jobs = response.Payload
+		}
+		formatScaleSetJobs(jobs)
+		return nil
+	},
+}
+
+func formatScaleSetJobs(jobs params.ScaleSetJobsPaginatedResponse) {
+	if outputFormat == common.OutputFormatJSON {
+		printAsJSON(jobs)
+		return
+	}
+	if len(jobs.Results) == 0 {
+		fmt.Println("No jobs found.")
+		return
+	}
+	t := table.NewWriter()
+	header := table.Row{"ID", "Scale Set ID", "Name", "Status", "Result", "Runner Name", "Repository", "Workflow run URL"}
+	pageHeader, pageHeaderCfg := paginatedListHeader(len(header), jobs.TotalCount, jobs.Pages, jobs.CurrentPage)
+	t.AppendHeader(pageHeader, pageHeaderCfg)
+	t.AppendHeader(header)
+
+	for _, job := range jobs.Results {
+		repo := fmt.Sprintf("%s/%s", job.RepositoryOwner, job.RepositoryName)
+		t.AppendRow(table.Row{job.ID, job.ScaleSetID, job.Name, job.Status, job.Result, job.RunnerName, repo, job.WorkflowRunURL})
+		t.AppendSeparator()
+	}
+	fmt.Println(t.Render())
+}
+
 var scalesetRunnerListCmd = &cobra.Command{
 	Use:          "list <scaleset-id>",
 	Aliases:      []string{"ls"},
@@ -575,6 +655,8 @@ func init() {
 	scaleSetUpdateCmd.MarkFlagsMutuallyExclusive("proxy", "clear-proxy")
 	scaleSetUpdateCmd.MarkFlagsMutuallyExclusive("extra-specs-file", "extra-specs")
 
+	scaleSetDeleteCmd.Flags().BoolVarP(&scaleSetBypassGHErrors, "bypass-github-errors", "b", false, "Remove the scale set even if GitHub fails to delete it. May leave it orphaned on GitHub.")
+
 	scaleSetAddCmd.Flags().StringVar(&scalesetProvider, "provider-name", "", "The name of the provider where runners will be created.")
 	scaleSetAddCmd.Flags().StringVar(&scalesetImage, "image", "", "The provider-specific image name to use for runners in this scale set.")
 	scaleSetAddCmd.Flags().StringVar(&scalesetName, "name", "", "The name of the scale set. This option is mandatory.")
@@ -619,6 +701,16 @@ func init() {
 		scalesetRunnerRotateCmd,
 	)
 
+	scalesetJobsListCmd.Flags().BoolVar(&scalesetJobsAll, "all", false, "Also list completed jobs.")
+	scalesetJobsListCmd.Flags().Int64Var(&scalesetJobsPage, "page", 0, "The page of results to fetch.")
+	scalesetJobsListCmd.Flags().Int64Var(&scalesetJobsPageSize, "page-size", 0, "Number of results per page. The server defaults to 25.")
+	scalesetJobsListCmd.Flags().StringVar(&scalesetJobsSince, "since", "", "Only list jobs recorded at or after this point. Accepts a duration (24h), an RFC3339 timestamp or YYYY-MM-DD.")
+	scalesetJobsListCmd.Flags().StringVar(&scalesetJobsUntil, "until", "", "Only list jobs recorded at or before this point. Accepts a duration (24h), an RFC3339 timestamp or YYYY-MM-DD.")
+
+	scalesetJobsCmd.AddCommand(
+		scalesetJobsListCmd,
+	)
+
 	scalesetCmd.AddCommand(
 		scalesetListCmd,
 		scaleSetShowCmd,
@@ -626,6 +718,7 @@ func init() {
 		scaleSetUpdateCmd,
 		scaleSetAddCmd,
 		scalesetRunnerCmd,
+		scalesetJobsCmd,
 	)
 
 	rootCmd.AddCommand(scalesetCmd)

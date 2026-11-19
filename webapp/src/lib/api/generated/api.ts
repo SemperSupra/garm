@@ -153,7 +153,7 @@ export interface ControllerInfo {
      */
     'metadata_url'?: string;
     /**
-     * MinimumJobAgeBackoff is the minimum time in seconds that a job must be in queued state before GARM will attempt to allocate a runner for it. When set to a non zero value, GARM will ignore the job until the job\'s age is greater than this value. When using the min_idle_runners feature of a pool, this gives enough time for potential idle runners to pick up the job before GARM attempts to allocate a new runner, thus avoiding the need to potentially scale down runners later.
+     * MinimumJobAgeBackoff is the minimum time in seconds that a job must be in queued state before GARM will attempt to allocate a runner for it. When set to a non zero value, GARM will ignore the job until the job\'s age is greater than this value. When using the min_idle_runners feature of a pool, this gives enough time for potential idle runners to pick up the job before GARM attempts to allocate a new runner, thus avoiding the need to potentially scale down runners later. When set to 0, pool managers also react to queued webhooks immediately instead of on their next poll.
      * @type {number}
      * @memberof ControllerInfo
      */
@@ -465,6 +465,18 @@ export interface CreateGithubCredentialsParams {
      * @memberof CreateGithubCredentialsParams
      */
     'pat'?: GithubPAT;
+    /**
+     * ReserveUsageEnabled toggles whether or not to allocate a certain percentage of the available rate limit to critical operations such as delete operations for runners that have finished their jobs.
+     * @type {boolean}
+     * @memberof CreateGithubCredentialsParams
+     */
+    'reserve_usage_enabled'?: boolean;
+    /**
+     * ReserveUsagePercentage is the percentage of available rate limit reserved for critical operations. Setting this value too high will negatively impact normal operations, so it is capped at 50%. A value between 5% and 20% should be safe on most setups. Adjust this based on your usage patterns.
+     * @type {number}
+     * @memberof CreateGithubCredentialsParams
+     */
+    'reserve_usage_percentage'?: number;
 }
 /**
  * 
@@ -502,6 +514,12 @@ export interface CreateGithubEndpointParams {
      * @memberof CreateGithubEndpointParams
      */
     'name'?: string;
+    /**
+     * ToolsMetadataURL is an optional GitHub API compatible releases URL that publishes runner binaries. The tools it publishes take precedence over the ones the endpoint API reports, for the OS/arch combos they cover. It is how runners for architectures upstream GitHub does not build are made available.
+     * @type {string}
+     * @memberof CreateGithubEndpointParams
+     */
+    'tools_metadata_url'?: string;
     /**
      * 
      * @type {string}
@@ -1294,6 +1312,18 @@ export interface ForgeCredentials {
      * @memberof ForgeCredentials
      */
     'repositories'?: Array<Repository>;
+    /**
+     * ReserveUsageEnabled toggles whether or not to allocate a certain percentage of the available rate limit to critical operations such as delete operations for runners that have finished their jobs.
+     * @type {boolean}
+     * @memberof ForgeCredentials
+     */
+    'reserve_usage_enabled'?: boolean;
+    /**
+     * ReserveUsagePercentage is the percentage of available rate limit reserved for critical operations. Setting this value too high will negatively impact normal operations, so it is capped at 50%. A value between 5% and 20% should be safe on most setups. Adjust this based on your usage patterns.
+     * @type {number}
+     * @memberof ForgeCredentials
+     */
+    'reserve_usage_percentage'?: number;
     /**
      * 
      * @type {string}
@@ -2278,6 +2308,12 @@ export interface Job {
      */
     'org_id'?: string;
     /**
+     * PoolID is set when one of the pool\'s runners picks up the job.
+     * @type {string}
+     * @memberof Job
+     */
+    'pool_id'?: string;
+    /**
      * The entity that received the hook.  Webhooks may be configured on the repo, the org and/or the enterprise. If we only configure a repo to use garm, we\'ll only ever receive a webhook from the repo. But if we configure the parent org of the repo and the parent enterprise of the org to use garm, a webhook will be sent for each entity type, in response to one workflow event. Thus, we will get 3 webhooks with the same run_id and job id. Record all involved entities in the same job if we have them configured in garm.
      * @type {string}
      * @memberof Job
@@ -2326,12 +2362,6 @@ export interface Job {
      */
     'runner_name'?: string;
     /**
-     * ScaleSetJobID is the job ID when generated for a scale set.
-     * @type {string}
-     * @memberof Job
-     */
-    'scaleset_job_id'?: string;
-    /**
      * 
      * @type {string}
      * @memberof Job
@@ -2359,6 +2389,206 @@ export interface Job {
      * 
      * @type {string}
      * @memberof Job
+     */
+    'workflow_run_url'?: string;
+}
+/**
+ * 
+ * @export
+ * @interface JobsPaginatedResponse
+ */
+export interface JobsPaginatedResponse {
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponse
+     */
+    'current_page'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponse
+     */
+    'next_page'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponse
+     */
+    'pages'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponse
+     */
+    'previous_page'?: number;
+    /**
+     * 
+     * @type {Array<JobsPaginatedResponseResultsInner>}
+     * @memberof JobsPaginatedResponse
+     */
+    'results'?: Array<JobsPaginatedResponseResultsInner>;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponse
+     */
+    'total_count'?: number;
+}
+/**
+ * 
+ * @export
+ * @interface JobsPaginatedResponseResultsInner
+ */
+export interface JobsPaginatedResponseResultsInner {
+    /**
+     * Action is the specific activity that triggered the event.
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'action'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'completed_at'?: string;
+    /**
+     * Conclusion is the outcome of the job. Possible values: \"success\", \"failure\", \"neutral\", \"cancelled\", \"skipped\", \"timed_out\", \"action_required\"
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'conclusion'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'created_at'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'enterprise_id'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'forge_instance_id'?: string;
+    /**
+     * ID is the ID of the job.
+     * @type {number}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'id'?: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'labels'?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'locked_by'?: string;
+    /**
+     * Name is the name if the job that was triggered.
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'org_id'?: string;
+    /**
+     * PoolID is set when one of the pool\'s runners picks up the job.
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'pool_id'?: string;
+    /**
+     * The entity that received the hook.  Webhooks may be configured on the repo, the org and/or the enterprise. If we only configure a repo to use garm, we\'ll only ever receive a webhook from the repo. But if we configure the parent org of the repo and the parent enterprise of the org to use garm, a webhook will be sent for each entity type, in response to one workflow event. Thus, we will get 3 webhooks with the same run_id and job id. Record all involved entities in the same job if we have them configured in garm.
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'repo_id'?: string;
+    /**
+     * repository in which the job was triggered.
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'repository_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'repository_owner'?: string;
+    /**
+     * RunID is the ID of the workflow run. A run may have multiple jobs.
+     * @type {number}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'run_id'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'runner_group_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'runner_group_name'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'runner_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'runner_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'started_at'?: string;
+    /**
+     * Status is the phase of the lifecycle that the job is currently in. \"queued\", \"in_progress\" and \"completed\".
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'status'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'updated_at'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof JobsPaginatedResponseResultsInner
+     */
+    'workflow_job_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof JobsPaginatedResponseResultsInner
      */
     'workflow_run_url'?: string;
 }
@@ -3228,6 +3458,339 @@ export interface ScaleSet {
     'updated_at'?: string;
 }
 /**
+ * ScaleSetJob is the informational record of a job GitHub routed to a scale set. GitHub schedules these server side, so GARM never acts on them. They exist so users can list the jobs a scale set handled and see which runner serviced them.
+ * @export
+ * @interface ScaleSetJob
+ */
+export interface ScaleSetJob {
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'created_at'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'event_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'finish_time'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJob
+     */
+    'id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'job_workflow_ref'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'name'?: string;
+    /**
+     * Timestamps reported by GitHub for the job\'s routing funnel.
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'queue_time'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'repository_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'repository_owner'?: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ScaleSetJob
+     */
+    'request_labels'?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'result'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'runner_assign_time'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'runner_group_name'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJob
+     */
+    'runner_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'runner_name'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJob
+     */
+    'runner_request_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'scaleset_assign_time'?: string;
+    /**
+     * ScaleSetID is GARM\'s ID of the scale set that handled the job. It is zero for records migrated from older GARM versions, which never recorded the owning scale set.
+     * @type {number}
+     * @memberof ScaleSetJob
+     */
+    'scaleset_id'?: number;
+    /**
+     * ScaleSetJobID is the job ID assigned by the GitHub actions service.
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'scaleset_job_id'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'status'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'updated_at'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJob
+     */
+    'workflow_run_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJob
+     */
+    'workflow_run_url'?: string;
+}
+/**
+ * 
+ * @export
+ * @interface ScaleSetJobsPaginatedResponse
+ */
+export interface ScaleSetJobsPaginatedResponse {
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'current_page'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'next_page'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'pages'?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'previous_page'?: number;
+    /**
+     * 
+     * @type {Array<ScaleSetJobsPaginatedResponseResultsInner>}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'results'?: Array<ScaleSetJobsPaginatedResponseResultsInner>;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponse
+     */
+    'total_count'?: number;
+}
+/**
+ * 
+ * @export
+ * @interface ScaleSetJobsPaginatedResponseResultsInner
+ */
+export interface ScaleSetJobsPaginatedResponseResultsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'created_at'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'event_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'finish_time'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'job_workflow_ref'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'name'?: string;
+    /**
+     * Timestamps reported by GitHub for the job\'s routing funnel.
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'queue_time'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'repository_name'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'repository_owner'?: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'request_labels'?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'result'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'runner_assign_time'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'runner_group_name'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'runner_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'runner_name'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'runner_request_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'scaleset_assign_time'?: string;
+    /**
+     * ScaleSetID is GARM\'s ID of the scale set that handled the job. It is zero for records migrated from older GARM versions, which never recorded the owning scale set.
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'scaleset_id'?: number;
+    /**
+     * ScaleSetJobID is the job ID assigned by the GitHub actions service.
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'scaleset_job_id'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'status'?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'updated_at'?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'workflow_run_id'?: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ScaleSetJobsPaginatedResponseResultsInner
+     */
+    'workflow_run_url'?: string;
+}
+/**
  * 
  * @export
  * @interface StatusMessage
@@ -3565,6 +4128,18 @@ export interface UpdateGithubCredentialsParams {
      * @memberof UpdateGithubCredentialsParams
      */
     'pat'?: GithubPAT;
+    /**
+     * ReserveUsageEnabled toggles whether or not to allocate a certain percentage of the available rate limit to critical operations such as delete operations for runners that have finished their jobs.
+     * @type {boolean}
+     * @memberof UpdateGithubCredentialsParams
+     */
+    'reserve_usage_enabled'?: boolean;
+    /**
+     * ReserveUsagePercentage is the percentage of available rate limit reserved for critical operations. Setting this value too high will negatively impact normal operations, so it is capped at 50%. A value between 5% and 20% should be safe on most setups. Adjust this based on your usage patterns.
+     * @type {number}
+     * @memberof UpdateGithubCredentialsParams
+     */
+    'reserve_usage_percentage'?: number;
 }
 /**
  * 
@@ -3596,6 +4171,12 @@ export interface UpdateGithubEndpointParams {
      * @memberof UpdateGithubEndpointParams
      */
     'description'?: string;
+    /**
+     * ToolsMetadataURL is an optional GitHub API compatible releases URL that publishes runner binaries. Set it to an empty string to go back to using only the tools the endpoint API reports.
+     * @type {string}
+     * @memberof UpdateGithubEndpointParams
+     */
+    'tools_metadata_url'?: string;
     /**
      * 
      * @type {string}
@@ -3761,6 +4342,12 @@ export interface UpdateProxyParams {
  * @interface UpdateScaleSetParams
  */
 export interface UpdateScaleSetParams {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof UpdateScaleSetParams
+     */
+    'disable_update'?: boolean;
     /**
      * 
      * @type {boolean}
@@ -9378,11 +9965,16 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
     return {
         /**
          * 
-         * @summary List all jobs.
+         * @summary List jobs. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listJobs: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listJobs: async (page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/jobs`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -9397,6 +9989,30 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
 
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (pageSize !== undefined) {
+                localVarQueryParameter['pageSize'] = pageSize;
+            }
+
+            if (all !== undefined) {
+                localVarQueryParameter['all'] = all;
+            }
+
+            if (since !== undefined) {
+                localVarQueryParameter['since'] = (since as any instanceof Date) ?
+                    (since as any).toISOString() :
+                    since;
+            }
+
+            if (until !== undefined) {
+                localVarQueryParameter['until'] = (until as any instanceof Date) ?
+                    (until as any).toISOString() :
+                    until;
+            }
 
 
     
@@ -9421,12 +10037,17 @@ export const JobsApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
-         * @summary List all jobs.
+         * @summary List jobs. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listJobs(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Job>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listJobs(options);
+        async listJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<JobsPaginatedResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listJobs(page, pageSize, all, since, until, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['JobsApi.listJobs']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -9443,12 +10064,17 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
     return {
         /**
          * 
-         * @summary List all jobs.
+         * @summary List jobs. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listJobs(options?: RawAxiosRequestConfig): AxiosPromise<Array<Job>> {
-            return localVarFp.listJobs(options).then((request) => request(axios, basePath));
+        listJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): AxiosPromise<JobsPaginatedResponse> {
+            return localVarFp.listJobs(page, pageSize, all, since, until, options).then((request) => request(axios, basePath));
         },
     };
 };
@@ -9462,13 +10088,18 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
 export class JobsApi extends BaseAPI {
     /**
      * 
-     * @summary List all jobs.
+     * @summary List jobs. Only queued and in progress jobs are listed unless all is set.
+     * @param {number} [page] The page at which to list.
+     * @param {number} [pageSize] Number of items per page.
+     * @param {boolean} [all] Also list completed jobs.
+     * @param {string} [since] Only list jobs recorded at or after this timestamp.
+     * @param {string} [until] Only list jobs recorded at or before this timestamp.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      * @memberof JobsApi
      */
-    public listJobs(options?: RawAxiosRequestConfig) {
-        return JobsApiFp(this.configuration).listJobs(options).then((request) => request(this.axios, this.basePath));
+    public listJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig) {
+        return JobsApiFp(this.configuration).listJobs(page, pageSize, all, since, until, options).then((request) => request(this.axios, this.basePath));
     }
 }
 
@@ -15167,10 +15798,11 @@ export const ScalesetsApiAxiosParamCreator = function (configuration?: Configura
          * 
          * @summary Delete scale set by ID.
          * @param {string} scalesetID ID of the scale set to delete.
+         * @param {boolean} [bypassGHErrors] If true GARM removes the scale set even if GitHub fails to delete it, which may leave it orphaned on GitHub.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        deleteScaleSet: async (scalesetID: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        deleteScaleSet: async (scalesetID: string, bypassGHErrors?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'scalesetID' is not null or undefined
             assertParamExists('deleteScaleSet', 'scalesetID', scalesetID)
             const localVarPath = `/scalesets/{scalesetID}`
@@ -15188,6 +15820,10 @@ export const ScalesetsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            if (bypassGHErrors !== undefined) {
+                localVarQueryParameter['bypassGHErrors'] = bypassGHErrors;
+            }
 
 
     
@@ -15225,6 +15861,67 @@ export const ScalesetsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+
+    
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * List jobs handled by all scale sets. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listAllScaleSetJobs: async (page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/scalesets/jobs`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (pageSize !== undefined) {
+                localVarQueryParameter['pageSize'] = pageSize;
+            }
+
+            if (all !== undefined) {
+                localVarQueryParameter['all'] = all;
+            }
+
+            if (since !== undefined) {
+                localVarQueryParameter['since'] = (since as any instanceof Date) ?
+                    (since as any).toISOString() :
+                    since;
+            }
+
+            if (until !== undefined) {
+                localVarQueryParameter['until'] = (until as any instanceof Date) ?
+                    (until as any).toISOString() :
+                    until;
+            }
 
 
     
@@ -15336,6 +16033,71 @@ export const ScalesetsApiAxiosParamCreator = function (configuration?: Configura
 
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+
+    
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * List jobs handled by one scale set. Only queued and in progress jobs are listed unless all is set.
+         * @param {string} scalesetID ID of the scale set whose jobs to fetch.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listScaleSetJobs: async (scalesetID: string, page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'scalesetID' is not null or undefined
+            assertParamExists('listScaleSetJobs', 'scalesetID', scalesetID)
+            const localVarPath = `/scalesets/{scalesetID}/jobs`
+                .replace(`{${"scalesetID"}}`, encodeURIComponent(String(scalesetID)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (pageSize !== undefined) {
+                localVarQueryParameter['pageSize'] = pageSize;
+            }
+
+            if (all !== undefined) {
+                localVarQueryParameter['all'] = all;
+            }
+
+            if (since !== undefined) {
+                localVarQueryParameter['since'] = (since as any instanceof Date) ?
+                    (since as any).toISOString() :
+                    since;
+            }
+
+            if (until !== undefined) {
+                localVarQueryParameter['until'] = (until as any instanceof Date) ?
+                    (until as any).toISOString() :
+                    until;
+            }
 
 
     
@@ -15480,11 +16242,12 @@ export const ScalesetsApiFp = function(configuration?: Configuration) {
          * 
          * @summary Delete scale set by ID.
          * @param {string} scalesetID ID of the scale set to delete.
+         * @param {boolean} [bypassGHErrors] If true GARM removes the scale set even if GitHub fails to delete it, which may leave it orphaned on GitHub.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async deleteScaleSet(scalesetID: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<APIErrorResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteScaleSet(scalesetID, options);
+        async deleteScaleSet(scalesetID: string, bypassGHErrors?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<APIErrorResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteScaleSet(scalesetID, bypassGHErrors, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ScalesetsApi.deleteScaleSet']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -15500,6 +16263,22 @@ export const ScalesetsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.getScaleSet(scalesetID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ScalesetsApi.getScaleSet']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * List jobs handled by all scale sets. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async listAllScaleSetJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ScaleSetJobsPaginatedResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listAllScaleSetJobs(page, pageSize, all, since, until, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['ScalesetsApi.listAllScaleSetJobs']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -15539,6 +16318,23 @@ export const ScalesetsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.listRepoScaleSets(repoID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ScalesetsApi.listRepoScaleSets']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * List jobs handled by one scale set. Only queued and in progress jobs are listed unless all is set.
+         * @param {string} scalesetID ID of the scale set whose jobs to fetch.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async listScaleSetJobs(scalesetID: string, page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ScaleSetJobsPaginatedResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listScaleSetJobs(scalesetID, page, pageSize, all, since, until, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['ScalesetsApi.listScaleSetJobs']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -15614,11 +16410,12 @@ export const ScalesetsApiFactory = function (configuration?: Configuration, base
          * 
          * @summary Delete scale set by ID.
          * @param {string} scalesetID ID of the scale set to delete.
+         * @param {boolean} [bypassGHErrors] If true GARM removes the scale set even if GitHub fails to delete it, which may leave it orphaned on GitHub.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        deleteScaleSet(scalesetID: string, options?: RawAxiosRequestConfig): AxiosPromise<APIErrorResponse> {
-            return localVarFp.deleteScaleSet(scalesetID, options).then((request) => request(axios, basePath));
+        deleteScaleSet(scalesetID: string, bypassGHErrors?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<APIErrorResponse> {
+            return localVarFp.deleteScaleSet(scalesetID, bypassGHErrors, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -15629,6 +16426,19 @@ export const ScalesetsApiFactory = function (configuration?: Configuration, base
          */
         getScaleSet(scalesetID: string, options?: RawAxiosRequestConfig): AxiosPromise<ScaleSet> {
             return localVarFp.getScaleSet(scalesetID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * List jobs handled by all scale sets. Only queued and in progress jobs are listed unless all is set.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listAllScaleSetJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): AxiosPromise<ScaleSetJobsPaginatedResponse> {
+            return localVarFp.listAllScaleSetJobs(page, pageSize, all, since, until, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -15659,6 +16469,20 @@ export const ScalesetsApiFactory = function (configuration?: Configuration, base
          */
         listRepoScaleSets(repoID: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<ScaleSet>> {
             return localVarFp.listRepoScaleSets(repoID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * List jobs handled by one scale set. Only queued and in progress jobs are listed unless all is set.
+         * @param {string} scalesetID ID of the scale set whose jobs to fetch.
+         * @param {number} [page] The page at which to list.
+         * @param {number} [pageSize] Number of items per page.
+         * @param {boolean} [all] Also list completed jobs.
+         * @param {string} [since] Only list jobs recorded at or after this timestamp.
+         * @param {string} [until] Only list jobs recorded at or before this timestamp.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        listScaleSetJobs(scalesetID: string, page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig): AxiosPromise<ScaleSetJobsPaginatedResponse> {
+            return localVarFp.listScaleSetJobs(scalesetID, page, pageSize, all, since, until, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -15733,12 +16557,13 @@ export class ScalesetsApi extends BaseAPI {
      * 
      * @summary Delete scale set by ID.
      * @param {string} scalesetID ID of the scale set to delete.
+     * @param {boolean} [bypassGHErrors] If true GARM removes the scale set even if GitHub fails to delete it, which may leave it orphaned on GitHub.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      * @memberof ScalesetsApi
      */
-    public deleteScaleSet(scalesetID: string, options?: RawAxiosRequestConfig) {
-        return ScalesetsApiFp(this.configuration).deleteScaleSet(scalesetID, options).then((request) => request(this.axios, this.basePath));
+    public deleteScaleSet(scalesetID: string, bypassGHErrors?: boolean, options?: RawAxiosRequestConfig) {
+        return ScalesetsApiFp(this.configuration).deleteScaleSet(scalesetID, bypassGHErrors, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -15751,6 +16576,21 @@ export class ScalesetsApi extends BaseAPI {
      */
     public getScaleSet(scalesetID: string, options?: RawAxiosRequestConfig) {
         return ScalesetsApiFp(this.configuration).getScaleSet(scalesetID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * List jobs handled by all scale sets. Only queued and in progress jobs are listed unless all is set.
+     * @param {number} [page] The page at which to list.
+     * @param {number} [pageSize] Number of items per page.
+     * @param {boolean} [all] Also list completed jobs.
+     * @param {string} [since] Only list jobs recorded at or after this timestamp.
+     * @param {string} [until] Only list jobs recorded at or before this timestamp.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof ScalesetsApi
+     */
+    public listAllScaleSetJobs(page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig) {
+        return ScalesetsApiFp(this.configuration).listAllScaleSetJobs(page, pageSize, all, since, until, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -15787,6 +16627,22 @@ export class ScalesetsApi extends BaseAPI {
      */
     public listRepoScaleSets(repoID: string, options?: RawAxiosRequestConfig) {
         return ScalesetsApiFp(this.configuration).listRepoScaleSets(repoID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * List jobs handled by one scale set. Only queued and in progress jobs are listed unless all is set.
+     * @param {string} scalesetID ID of the scale set whose jobs to fetch.
+     * @param {number} [page] The page at which to list.
+     * @param {number} [pageSize] Number of items per page.
+     * @param {boolean} [all] Also list completed jobs.
+     * @param {string} [since] Only list jobs recorded at or after this timestamp.
+     * @param {string} [until] Only list jobs recorded at or before this timestamp.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof ScalesetsApi
+     */
+    public listScaleSetJobs(scalesetID: string, page?: number, pageSize?: number, all?: boolean, since?: string, until?: string, options?: RawAxiosRequestConfig) {
+        return ScalesetsApiFp(this.configuration).listScaleSetJobs(scalesetID, page, pageSize, all, since, until, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -16405,7 +17261,7 @@ export const ToolsApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64 or arm64)  X-Tool-Version: Version string
+         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64, arm64, arm, ppc64le, s390x or riscv64)  X-Tool-Version: Version string
          * @summary Upload a GARM agent tool binary.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -16475,7 +17331,7 @@ export const ToolsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64 or arm64)  X-Tool-Version: Version string
+         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64, arm64, arm, ppc64le, s390x or riscv64)  X-Tool-Version: Version string
          * @summary Upload a GARM agent tool binary.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -16518,7 +17374,7 @@ export const ToolsApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.listGARMAgentReleases(options).then((request) => request(axios, basePath));
         },
         /**
-         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64 or arm64)  X-Tool-Version: Version string
+         * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64, arm64, arm, ppc64le, s390x or riscv64)  X-Tool-Version: Version string
          * @summary Upload a GARM agent tool binary.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -16562,7 +17418,7 @@ export class ToolsApi extends BaseAPI {
     }
 
     /**
-     * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64 or arm64)  X-Tool-Version: Version string
+     * Uploads a GARM agent tool for a specific OS and architecture. This will automatically replace any existing tool for the same OS/architecture combination.  Uses custom headers for metadata:  X-Tool-Name: Name of the tool  X-Tool-Description: Description  X-Tool-OS-Type: OS type (linux or windows)  X-Tool-OS-Arch: Architecture (amd64, arm64, arm, ppc64le, s390x or riscv64)  X-Tool-Version: Version string
      * @summary Upload a GARM agent tool binary.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}

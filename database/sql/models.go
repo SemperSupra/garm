@@ -94,7 +94,7 @@ type ControllerInfo struct {
 type Tag struct {
 	Base
 
-	Name      string      `gorm:"type:varchar(64);uniqueIndex"`
+	Name      string      `gorm:"type:varchar(255);uniqueIndex"`
 	Pools     []*Pool     `gorm:"many2many:pool_tags;constraint:OnDelete:CASCADE,OnUpdate:CASCADE;"`
 	ScaleSets []*ScaleSet `gorm:"many2many:scaleset_tags;constraint:OnDelete:CASCADE,OnUpdate:CASCADE;"`
 }
@@ -183,8 +183,9 @@ type Pool struct {
 	ProxyID *uint `gorm:"index"`
 	Proxy   Proxy `gorm:"foreignKey:ProxyID"`
 
-	Instances []Instance `gorm:"foreignKey:PoolID"`
-	Priority  uint       `gorm:"index:idx_pool_priority"`
+	Instances []Instance    `gorm:"foreignKey:PoolID"`
+	Jobs      []WorkflowJob `gorm:"foreignKey:PoolID;constraint:OnDelete:SET NULL"`
+	Priority  uint          `gorm:"index:idx_pool_priority"`
 }
 
 // ScaleSet represents a github scale set. Scale sets are almost identical to pools with
@@ -251,6 +252,48 @@ type ScaleSet struct {
 
 	Tags      []*Tag     `gorm:"many2many:scaleset_tags;constraint:OnDelete:CASCADE,OnUpdate:CASCADE;"`
 	Instances []Instance `gorm:"foreignKey:ScaleSetFkID"`
+	// Jobs is the informational ledger of jobs GitHub routed to this
+	// scale set. It is removed together with the scale set.
+	Jobs []ScaleSetJob `gorm:"foreignKey:ScaleSetFkID;constraint:OnDelete:CASCADE"`
+}
+
+// ScaleSetJob records a job GitHub routed to a scale set, as seen on the
+// scale set's message queue. GitHub schedules these jobs server side.
+// GARM records them so users can list them and see which runner serviced
+// them. Nothing in GARM acts on these records.
+type ScaleSetJob struct {
+	ID        uint `gorm:"primarykey"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	// ScaleSetJobID is the job ID assigned by the GitHub actions service.
+	ScaleSetJobID string `gorm:"uniqueIndex"`
+
+	// ScaleSetFkID is NULL only for records migrated from workflow_jobs,
+	// which never recorded the owning scale set.
+	ScaleSetFkID *uint    `gorm:"index"`
+	ScaleSet     ScaleSet `gorm:"foreignKey:ScaleSetFkID"`
+
+	WorkflowRunID   int64 `gorm:"index"`
+	RunnerRequestID int64
+	JobWorkflowRef  string
+	Name            string
+	Status          string `gorm:"index"`
+	Result          string
+	EventName       string
+	RequestLabels   datatypes.JSON
+	RepositoryName  string
+	RepositoryOwner string
+	RunnerGroupName string
+	RunnerID        int64
+	RunnerName      string
+	WorkflowRunURL  string
+
+	// Timestamps reported by GitHub for the job's routing funnel.
+	QueueTime          time.Time
+	ScaleSetAssignTime time.Time
+	RunnerAssignTime   time.Time
+	FinishTime         time.Time
 }
 
 type RepositoryEvent struct {
@@ -473,8 +516,6 @@ type WorkflowJob struct {
 
 	// WorkflowJobID is the ID of the workflow job.
 	WorkflowJobID int64 `gorm:"index:workflow_job_id_idx"`
-	// ScaleSetJobID is the job ID for a scaleset job.
-	ScaleSetJobID string `gorm:"index:scaleset_job_id_idx"`
 
 	// RunID is the ID of the workflow run. A run may have multiple jobs.
 	RunID int64
@@ -529,6 +570,11 @@ type WorkflowJob struct {
 	ForgeInstanceID *uuid.UUID    `gorm:"index"`
 	ForgeInstance   ForgeInstance `gorm:"foreignKey:ForgeInstanceID"`
 
+	// PoolID is set when one of the pool's runners picks up the job.
+	// Pools cannot know in advance which queued job a runner will service.
+	PoolID *uuid.UUID `gorm:"index"`
+	Pool   Pool       `gorm:"foreignKey:PoolID"`
+
 	LockedBy uuid.UUID
 
 	CreatedAt time.Time
@@ -566,6 +612,12 @@ type GithubCredentials struct {
 
 	Endpoint     GithubEndpoint `gorm:"foreignKey:EndpointName"`
 	EndpointName *string        `gorm:"index"`
+
+	// ReserveUsageEnabled toggles whether or not to allocate a certain
+	// percentage of the available rate limit to critical operations such
+	// as delete operations for runners that have finished their jobs.
+	ReserveUsageEnabled    bool
+	ReserveUsagePercentage int
 
 	Repositories  []Repository   `gorm:"foreignKey:CredentialsID"`
 	Organizations []Organization `gorm:"foreignKey:CredentialsID"`

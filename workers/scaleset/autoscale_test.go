@@ -88,7 +88,7 @@ func TestAutoscaleRequiresFreshRunnerState(t *testing.T) {
 				Run(func(context.Context, uint, bool) { close(freshRefresh) }).Return(fresh, nil).Once()
 			// Cleanup failure must not prevent scaling from the successful refresh.
 			store.EXPECT().DeleteInstanceByName(mock.Anything, "deleted").Return(errors.New("row cleanup failed")).Once()
-			store.EXPECT().ControllerInfo().Return(params.ControllerInfo{}, nil).Maybe()
+			store.EXPECT().ControllerInfo(mock.Anything).Return(params.ControllerInfo{}, nil).Maybe()
 			store.EXPECT().CreateScaleSetInstance(mock.Anything, uint(4), mock.Anything).
 				RunAndReturn(func(_ context.Context, _ uint, p params.CreateInstanceParams) (params.Instance, error) {
 					localCreates.Add(1)

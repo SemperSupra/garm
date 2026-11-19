@@ -97,7 +97,9 @@ func TestConsolidateProviderStateDefersUnconfirmedListMiss(t *testing.T) {
 			}
 			worker := &Worker{
 				ctx: context.Background(), consumerID: "test-list-miss", provider: provider,
-				store: store, scaleSet: params.ScaleSet{
+				store: store, pseudoPoolID: "local-truenas-linux-general-11111111-1111-1111-1111-111111111111",
+				legacyPoolIDDrained: true,
+				scaleSet: params.ScaleSet{
 					ID: 2, Name: "local-truenas-linux-general",
 					RepoID: "11111111-1111-1111-1111-111111111111",
 				},
@@ -180,8 +182,8 @@ func TestHandleJobsStartedResetsMaterializationFailures(t *testing.T) {
 		RepoID: "11111111-1111-1111-1111-111111111111",
 	}
 
-	store.On("CreateOrUpdateJob", mock.Anything, mock.AnythingOfType("params.Job")).
-		Return(params.Job{}, nil).
+	store.On("CreateOrUpdateScaleSetJob", mock.Anything, mock.AnythingOfType("params.ScaleSetJob")).
+		Return(params.ScaleSetJob{}, nil).
 		Once()
 	store.On("UpdateInstance", mock.Anything, "runner-1", mock.MatchedBy(func(update params.UpdateInstanceParams) bool {
 		return update.RunnerStatus == params.RunnerActive

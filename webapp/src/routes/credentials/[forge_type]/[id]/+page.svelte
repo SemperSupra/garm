@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { garmApi } from '$lib/api/client.js';
 	import type { ForgeCredentials, Repository, Organization, Enterprise } from '$lib/api/generated/api.js';
@@ -19,8 +19,8 @@
 	let showDeleteModal = false;
 	let unsubscribeWebsocket: (() => void) | null = null;
 
-	$: credentialId = $page.params.id;
-	$: forgeType = $page.params.forge_type;
+	$: credentialId = page.params.id;
+	$: forgeType = page.params.forge_type;
 	$: isGithub = forgeType === 'github';
 	$: isGitea = forgeType === 'gitea';
 
@@ -379,7 +379,7 @@
 						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Base URL</dt>
 						<dd class="mt-1 text-sm text-gray-900 dark:text-white break-all">{credential.endpoint.base_url}</dd>
 					</div>
-					{#if isGitea && credential.endpoint.tools_metadata_url}
+					{#if credential.endpoint.tools_metadata_url}
 						<div>
 							<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Tools Metadata URL</dt>
 							<dd class="mt-1 text-sm text-gray-900 dark:text-white break-all">{credential.endpoint.tools_metadata_url}</dd>
@@ -416,6 +416,12 @@
 						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Reset</dt>
 						<dd class="mt-1 text-sm text-gray-900 dark:text-white">
 							{new Date((credential.rate_limit.reset || 0) * 1000).toLocaleString()}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Reserved for critical operations</dt>
+						<dd class="mt-1 text-sm text-gray-900 dark:text-white">
+							{credential.reserve_usage_enabled ? `${credential.reserve_usage_percentage || 0}%` : 'Disabled'}
 						</dd>
 					</div>
 				</dl>

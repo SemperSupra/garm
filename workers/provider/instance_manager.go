@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,11 +28,47 @@ import (
 	"github.com/cloudbase/garm/cache"
 	dbCommon "github.com/cloudbase/garm/database/common"
 	garmErrors "github.com/cloudbase/garm/internal/errors"
+	"github.com/cloudbase/garm/metrics"
 	"github.com/cloudbase/garm/params"
 	"github.com/cloudbase/garm/runner/common"
 	garmUtil "github.com/cloudbase/garm/util"
 	garmX509 "github.com/cloudbase/garm/util/x509"
 )
+
+// dbCallTimeout bounds a single store call made by an instance manager. The
+// store may be a remote database, and a query that never comes back would
+// otherwise park the manager's loop goroutine for good, stranding the instance
+// in whatever transient status it was last written to. Provider calls carry
+// their own deadline. This is the equivalent for the store.
+const dbCallTimeout = 30 * time.Second
+
+// The four helpers below are the manager's store operations. They exist so the
+// deadline is applied in one place per operation rather than at every call
+// site, and so no call site can forget it.
+
+func (i *instanceManager) setInstanceStatus(name string, status commonParams.InstanceStatus, providerFault []byte, force bool) error {
+	ctx, cancel := context.WithTimeout(i.ctx, dbCallTimeout)
+	defer cancel()
+	return i.helper.SetInstanceStatus(ctx, name, status, providerFault, force)
+}
+
+func (i *instanceManager) persistProviderState(name string, providerInstance commonParams.ProviderInstance) (params.Instance, error) {
+	ctx, cancel := context.WithTimeout(i.ctx, dbCallTimeout)
+	defer cancel()
+	return i.helper.persistProviderInstanceState(ctx, name, providerInstance)
+}
+
+func (i *instanceManager) controllerInfo() (params.ControllerInfo, error) {
+	ctx, cancel := context.WithTimeout(i.ctx, dbCallTimeout)
+	defer cancel()
+	return i.helper.GetControllerInfo(ctx)
+}
+
+func (i *instanceManager) githubEntity(entity params.ForgeEntity) (params.ForgeEntity, error) {
+	ctx, cancel := context.WithTimeout(i.ctx, dbCallTimeout)
+	defer cancel()
+	return i.helper.GetGithubEntity(ctx, entity)
+}
 
 func newInstanceManager(ctx context.Context, instance params.Instance, scaleSet params.ScaleSet, provider common.Provider, helper providerHelper) (*instanceManager, error) {
 	ctx = garmUtil.WithSlogContext(ctx, slog.Any("worker", fmt.Sprintf("instance-worker-%s", instance.Name)))
@@ -148,7 +185,7 @@ func (i *instanceManager) getEntity() (params.ForgeEntity, error) {
 	if err != nil {
 		return params.ForgeEntity{}, fmt.Errorf("getting entity: %w", err)
 	}
-	ghEntity, err := i.helper.GetGithubEntity(entity)
+	ghEntity, err := i.githubEntity(entity)
 	if err != nil {
 		return params.ForgeEntity{}, fmt.Errorf("getting entity: %w", err)
 	}
@@ -156,8 +193,9 @@ func (i *instanceManager) getEntity() (params.ForgeEntity, error) {
 }
 
 func (i *instanceManager) pseudoPoolID() string {
-	// This is temporary. We need to extend providers to know about scale sets.
-	return fmt.Sprintf("%s-%s", i.scaleSet.Name, i.scaleSetEntity.ID)
+	// nolint:golangci-lint,godox
+	// TODO(gabriel-samfira): extend providers to know about scale sets.
+	return garmUtil.ScaleSetPseudoPoolID(i.scaleSetEntity.ID, i.scaleSet.ID)
 }
 
 func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instance) (err error) {
@@ -284,7 +322,7 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 		}
 	}
 
-	updated, err := i.helper.updateArgsFromProviderInstance(instance.Name, providerInstance)
+	updated, err := i.persistProviderState(instance.Name, providerInstance)
 	if err != nil {
 		return fmt.Errorf("updating instance args: %w", err)
 	}
@@ -303,13 +341,16 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 }
 
 func (i *instanceManager) getProviderBaseParams() (common.ProviderBaseParams, error) {
-	info, err := i.helper.GetControllerInfo()
+	info, err := i.controllerInfo()
 	if err != nil {
 		return common.ProviderBaseParams{}, fmt.Errorf("getting controller info: %w", err)
 	}
 
 	return common.ProviderBaseParams{
 		ControllerInfo: info,
+		EntityType:     i.scaleSetEntity.EntityType,
+		EntityID:       i.scaleSetEntity.ID,
+		ScaleSetID:     i.scaleSet.ID,
 	}, nil
 }
 
@@ -343,6 +384,24 @@ func (i *instanceManager) handleDeleteInstanceInProvider(instance params.Instanc
 	return nil
 }
 
+// recordLifecycleEvent counts a runner removal decision made by this manager,
+// by outcome. The entity String() form is used for the owner label; a bare
+// repo name would be ambiguous across owners.
+func (i *instanceManager) recordLifecycleEvent(outcome string) {
+	var owner string
+	if cachedEntity, ok := cache.GetEntity(i.scaleSetEntity.ID); ok {
+		owner = cachedEntity.String()
+	}
+	metrics.RunnerLifecycleCount.WithLabelValues(
+		outcome,                           // label: outcome
+		i.scaleSet.ProviderName,           // label: provider
+		owner,                             // label: pool_owner
+		string(i.scaleSet.ScaleSetType()), // label: pool_type
+		"",                                // label: pool_id
+		strconv.FormatUint(uint64(i.scaleSet.ID), 10), // label: scaleset_id
+	).Inc()
+}
+
 func (i *instanceManager) consolidateState() error {
 	i.consolidateMux.Lock()
 	defer i.consolidateMux.Unlock()
@@ -362,14 +421,40 @@ func (i *instanceManager) consolidateState() error {
 	switch instance.Status {
 	case commonParams.InstancePendingCreate:
 		// kick off the creation process
-		if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstanceCreating, nil, false); err != nil {
+		if err := i.setInstanceStatus(instance.Name, commonParams.InstanceCreating, nil, false); err != nil {
 			return fmt.Errorf("setting instance status to creating: %w", err)
 		}
 		if err := i.handleCreateInstanceInProvider(instance); err != nil {
 			slog.ErrorContext(i.ctx, "creating instance in provider", "error", err)
-			if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstanceError, []byte(err.Error()), true); err != nil {
+			i.recordLifecycleEvent(metrics.OutcomeProviderError)
+			if err := i.setInstanceStatus(instance.Name, commonParams.InstanceError, []byte(err.Error()), true); err != nil {
 				return fmt.Errorf("setting instance status to error: %w", err)
 			}
+		}
+	case commonParams.InstanceCreating:
+		// Our own create pass returned without recording an outcome, so the
+		// instance is orphaned rather than in progress. Consolidation is
+		// serialized and runs on the same goroutine that performs the create,
+		// so no create call can be in flight while we are in this switch.
+		// Fail it and let the error lane below clean it up.
+		//
+		// Not forced on purpose. If the runner booted and registered anyway
+		// the row is already running, which does not allow a move to error,
+		// so the state machine refuses us instead of killing a live runner.
+		slog.ErrorContext(
+			i.ctx, "create left instance in creating; failing it",
+			"runner_name", instance.Name)
+		err := i.setInstanceStatus(
+			instance.Name, commonParams.InstanceError,
+			[]byte("create was interrupted before the provider result was recorded"), false)
+		if err != nil {
+			var te *runnerErrors.InstanceTransitionError
+			if errors.As(err, &te) || errors.Is(err, runnerErrors.ErrNotFound) {
+				// The row moved on without us. The watcher delivers the new
+				// state, so there is nothing to do here.
+				return nil
+			}
+			return fmt.Errorf("failing interrupted instance: %w", err)
 		}
 	case commonParams.InstanceRunning:
 		// Nothing to do. The provider finished creating the instance.
@@ -397,7 +482,7 @@ func (i *instanceManager) consolidateState() error {
 			}
 		}
 
-		if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstanceDeleting, nil, true); err != nil {
+		if err := i.setInstanceStatus(instance.Name, commonParams.InstanceDeleting, nil, true); err != nil {
 			if errors.Is(err, runnerErrors.ErrNotFound) {
 				return nil
 			}
@@ -408,14 +493,14 @@ func (i *instanceManager) consolidateState() error {
 			slog.ErrorContext(i.ctx, "deleting instance in provider", "error", err, "forced", forced)
 			if !forced {
 				i.incrementBackOff()
-				if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstancePendingDelete, []byte(err.Error()), true); err != nil {
+				if err := i.setInstanceStatus(instance.Name, commonParams.InstancePendingDelete, []byte(err.Error()), true); err != nil {
 					return fmt.Errorf("setting instance status to error: %w", err)
 				}
 
 				return fmt.Errorf("error removing instance. Will retry: %w", err)
 			}
 		}
-		if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstanceDeleted, nil, false); err != nil {
+		if err := i.setInstanceStatus(instance.Name, commonParams.InstanceDeleted, nil, false); err != nil {
 			var te *runnerErrors.InstanceTransitionError
 			switch {
 			case errors.Is(err, runnerErrors.ErrNotFound):
@@ -425,7 +510,7 @@ func (i *instanceManager) consolidateState() error {
 				// provider delete ran. The provider resource is confirmed
 				// gone at this point, so force the terminal state instead of
 				// re-driving a delete against nothing.
-				if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstanceDeleted, nil, true); err != nil && !errors.Is(err, runnerErrors.ErrNotFound) {
+				if err := i.setInstanceStatus(instance.Name, commonParams.InstanceDeleted, nil, true); err != nil && !errors.Is(err, runnerErrors.ErrNotFound) {
 					return fmt.Errorf("setting instance status to deleted: %w", err)
 				}
 			default:
@@ -436,7 +521,7 @@ func (i *instanceManager) consolidateState() error {
 	case commonParams.InstanceError:
 		// Instance is in error state. We wait for next status or potentially retry
 		// spawning the instance with a backoff timer.
-		if err := i.helper.SetInstanceStatus(instance.Name, commonParams.InstancePendingDelete, nil, true); err != nil {
+		if err := i.setInstanceStatus(instance.Name, commonParams.InstancePendingDelete, nil, true); err != nil {
 			return fmt.Errorf("setting instance status to error: %w", err)
 		}
 	case commonParams.InstanceDeleted:

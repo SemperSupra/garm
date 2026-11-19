@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,9 +40,11 @@ import (
 	commonParams "github.com/cloudbase/garm-provider-common/params"
 	"github.com/cloudbase/garm-provider-common/util"
 	"github.com/cloudbase/garm/auth"
+	"github.com/cloudbase/garm/cache"
 	"github.com/cloudbase/garm/config"
 	dbCommon "github.com/cloudbase/garm/database/common"
 	garmErrors "github.com/cloudbase/garm/internal/errors"
+	"github.com/cloudbase/garm/metrics"
 	"github.com/cloudbase/garm/params"
 	"github.com/cloudbase/garm/runner/common"
 	"github.com/cloudbase/garm/runner/pool"
@@ -60,7 +63,7 @@ type failedEntity struct {
 }
 
 func NewRunner(ctx context.Context, cfg config.Config, db dbCommon.Store, token auth.InstanceTokenGetter) (*Runner, error) {
-	ctrlID, err := db.ControllerInfo()
+	ctrlID, err := db.ControllerInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching controller info: %w", err)
 	}
@@ -354,7 +357,7 @@ func (r *Runner) UpdateController(ctx context.Context, param params.UpdateContro
 		}
 	}
 
-	info, err := r.store.UpdateController(param)
+	info, err := r.store.UpdateController(ctx, param)
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("error updating controller info: %w", err)
 	}
@@ -369,7 +372,7 @@ func (r *Runner) ForceToolsSync(ctx context.Context) (params.ControllerInfo, err
 	}
 
 	// Get current controller info
-	info, err := r.store.ControllerInfo()
+	info, err := r.store.ControllerInfo(ctx)
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("error getting controller info: %w", err)
 	}
@@ -381,13 +384,13 @@ func (r *Runner) ForceToolsSync(ctx context.Context) (params.ControllerInfo, err
 
 	// Reset the cached index to trigger force sync.
 	// This will cause the watcher to pick up the change and sync immediately
-	err = r.store.UpdateCachedGARMAgentReleases(nil, time.Time{})
+	err = r.store.UpdateCachedGARMAgentReleases(ctx, nil, time.Time{})
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("error resetting cached release index: %w", err)
 	}
 
 	// Get updated controller info
-	info, err = r.store.ControllerInfo()
+	info, err = r.store.ControllerInfo(ctx)
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("error getting updated controller info: %w", err)
 	}
@@ -427,7 +430,7 @@ func (r *Runner) GetControllerInfo(ctx context.Context) (params.ControllerInfo, 
 		return params.ControllerInfo{}, fmt.Errorf("error fetching hostname: %w", err)
 	}
 
-	info, err := r.store.ControllerInfo()
+	info, err := r.store.ControllerInfo(ctx)
 	if err != nil {
 		return params.ControllerInfo{}, fmt.Errorf("error fetching controller info: %w", err)
 	}
@@ -1280,8 +1283,57 @@ func (r *Runner) DeleteRunner(ctx context.Context, instanceName string, forceDel
 		}
 		return fmt.Errorf("error updating runner state: %w", err)
 	}
+	recordManualDeleteEvent(instance)
 
 	return nil
+}
+
+// recordManualDeleteEvent counts an explicit, API-driven runner removal on
+// the lifecycle metric. Labels are resolved from the in-memory cache. The
+// entity String() form is used for the owner label; a bare repo name would
+// be ambiguous across owners.
+func recordManualDeleteEvent(instance params.Instance) {
+	var provider, poolType, entityID string
+	switch {
+	case instance.PoolID != "":
+		pool, ok := cache.GetPoolByID(instance.PoolID)
+		if !ok {
+			return
+		}
+		provider = pool.ProviderName
+		poolType = string(pool.PoolType())
+		if entity, err := pool.GetEntity(); err == nil {
+			entityID = entity.ID
+		}
+	case instance.ScaleSetID != 0:
+		scaleSet, ok := cache.GetScaleSetByID(instance.ScaleSetID)
+		if !ok {
+			return
+		}
+		provider = scaleSet.ProviderName
+		poolType = string(scaleSet.ScaleSetType())
+		if entity, err := scaleSet.GetEntity(); err == nil {
+			entityID = entity.ID
+		}
+	default:
+		return
+	}
+	var owner string
+	if cachedEntity, ok := cache.GetEntity(entityID); ok {
+		owner = cachedEntity.String()
+	}
+	var scaleSetID string
+	if instance.ScaleSetID != 0 {
+		scaleSetID = strconv.FormatUint(uint64(instance.ScaleSetID), 10)
+	}
+	metrics.RunnerLifecycleCount.WithLabelValues(
+		metrics.OutcomeManualDelete, // label: outcome
+		provider,                    // label: provider
+		owner,                       // label: pool_owner
+		poolType,                    // label: pool_type
+		instance.PoolID,             // label: pool_id
+		scaleSetID,                  // label: scaleset_id
+	).Inc()
 }
 
 func (r *Runner) getGHCliFromInstance(ctx context.Context, instance params.Instance) (common.GithubClient, *scalesets.ScaleSetClient, error) {

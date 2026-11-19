@@ -56,11 +56,13 @@ func TestDeletingInstancesDoNotCountAsRunnersButConsumeProviderSlots(t *testing.
 				},
 			}
 
-			assert.Zero(t, w.runnerCount())
-			assert.Zero(t, w.runnersToAdd())
+			assert.Zero(t, w.usableRunnerCount())
+			assert.Equal(t, 1, w.runnerCount())
+			assert.Zero(t, min(w.targetRunners()-w.usableRunnerCount(), int(w.scaleSet.MaxRunners)-w.runnerCount()))
 
 			w.runners["runner"] = params.Instance{Status: commonParams.InstanceDeleted}
-			assert.Equal(t, 1, w.runnersToAdd())
+			assert.Zero(t, w.runnerCount())
+			assert.Equal(t, 1, min(w.targetRunners()-w.usableRunnerCount(), int(w.scaleSet.MaxRunners)-w.runnerCount()))
 		})
 	}
 }
@@ -75,7 +77,7 @@ func TestDeletingInstancesDoNotIncreaseScaleDownDelta(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, 1, w.runnerCount()-w.targetRunners())
+	assert.Equal(t, 1, w.usableRunnerCount()-w.targetRunners())
 }
 
 func TestScaleDownRemovesExcessIdleRunnerDespitePendingDeletion(t *testing.T) {
@@ -126,7 +128,7 @@ func TestScaleDownRemovesExcessIdleRunnerDespitePendingDeletion(t *testing.T) {
 	}
 	w.handleScaleDown()
 	assert.EqualValues(t, 1, removals.Load())
-	assert.Equal(t, 1, w.runnerCount())
+	assert.Equal(t, 1, w.usableRunnerCount())
 }
 
 func TestPendingCreatePreventsDuplicateReplacement(t *testing.T) {
@@ -138,18 +140,10 @@ func TestPendingCreatePreventsDuplicateReplacement(t *testing.T) {
 		},
 	}
 
+	assert.Equal(t, 1, w.usableRunnerCount())
 	assert.Equal(t, 1, w.runnerCount())
-	assert.Equal(t, w.targetRunners(), w.runnerCount())
-	assert.Zero(t, w.runnersToAdd())
-}
-
-func TestRunnersToAddHandlesLargeMaximum(t *testing.T) {
-	w := &Worker{
-		scaleSet: params.ScaleSet{MinIdleRunners: 1, MaxRunners: ^uint(0)},
-		runners:  make(map[string]params.Instance),
-	}
-
-	assert.Equal(t, 1, w.runnersToAdd())
+	assert.Equal(t, w.targetRunners(), w.usableRunnerCount())
+	assert.Zero(t, min(w.targetRunners()-w.usableRunnerCount(), int(w.scaleSet.MaxRunners)-w.runnerCount()))
 }
 
 func TestRunnersToAddCapsDeficitAtRemainingProviderSlots(t *testing.T) {
@@ -162,10 +156,10 @@ func TestRunnersToAddCapsDeficitAtRemainingProviderSlots(t *testing.T) {
 			"deleting":      {Status: commonParams.InstanceDeleting},
 		},
 	}
-	assert.Equal(t, 1, w.runnerCount())
-	assert.EqualValues(t, 4, w.providerSlotsInUse())
-	assert.Equal(t, 4, w.targetRunners()-w.runnerCount())
-	assert.Equal(t, 1, w.runnersToAdd())
+	assert.Equal(t, 1, w.usableRunnerCount())
+	assert.Equal(t, 4, w.runnerCount())
+	assert.Equal(t, 4, w.targetRunners()-w.usableRunnerCount())
+	assert.Equal(t, 1, min(w.targetRunners()-w.usableRunnerCount(), int(w.scaleSet.MaxRunners)-w.runnerCount()))
 }
 
 func TestTargetRunnersHonorsMaximum(t *testing.T) {
@@ -301,7 +295,7 @@ func TestReconcileDeletedRunnerCreatesOneReplacement(t *testing.T) {
 		}}, nil).
 		Once()
 	store.EXPECT().DeleteInstanceByName(mock.Anything, "deleted").Return(nil).Once()
-	store.EXPECT().ControllerInfo().Return(params.ControllerInfo{
+	store.EXPECT().ControllerInfo(mock.Anything).Return(params.ControllerInfo{
 		CallbackURL: "https://garm.example/callback",
 		MetadataURL: "https://garm.example/metadata",
 	}, nil).Once()

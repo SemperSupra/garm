@@ -35,22 +35,18 @@ import (
 	garmUtil "github.com/cloudbase/garm/util"
 )
 
+func agentToolTags(osType commonParams.OSType, osArch commonParams.OSArch) []string {
+	return []string{
+		garmAgentFileTag,
+		garmAgentOSTypeTag(osType),
+		garmAgentOSArchTag(osArch),
+	}
+}
+
 var (
-	windowsAMD64ToolsTags = []string{
-		garmAgentFileTag,
-		garmAgentOSTypeWindowsTag,
-		garmAgentOSArchAMD64Tag,
-	}
-	windowsARM64ToolsTags = []string{
-		garmAgentFileTag,
-		garmAgentOSTypeWindowsTag,
-		garmAgentOSArchARM64Tag,
-	}
-	linuxARM64ToolsTags = []string{
-		garmAgentFileTag,
-		garmAgentOSTypeLinuxTag,
-		garmAgentOSArchARM64Tag,
-	}
+	windowsAMD64ToolsTags = agentToolTags(commonParams.Windows, commonParams.Amd64)
+	windowsARM64ToolsTags = agentToolTags(commonParams.Windows, commonParams.Arm64)
+	linuxARM64ToolsTags   = agentToolTags(commonParams.Linux, commonParams.Arm64)
 )
 
 type GARMToolsTestSuite struct {
@@ -234,7 +230,7 @@ func (s *GARMToolsTestSuite) TestCreateGARMToolPaginationCleanup() {
 			OSArch:      commonParams.Amd64,
 			Version:     fmt.Sprintf("v0.0.%d", i),
 		}
-		reader := bytes.NewReader([]byte(fmt.Sprintf("version %d binary", i)))
+		reader := bytes.NewReader(fmt.Appendf(nil, "version %d binary", i))
 		_, err := s.Runner.CreateGARMTool(s.AdminContext, param, reader)
 		s.Require().NoError(err)
 	}
@@ -347,7 +343,7 @@ func (s *GARMToolsTestSuite) TestDeleteGarmToolSuccess() {
 func (s *GARMToolsTestSuite) TestDeleteGarmToolDeletesAllVersions() {
 	// Create multiple versions using windows/arm64
 	for i := 1; i <= 5; i++ {
-		reader := bytes.NewReader([]byte(fmt.Sprintf("version %d", i)))
+		reader := bytes.NewReader(fmt.Appendf(nil, "version %d", i))
 		// CreateGARMTool only keeps the latest, so we need to use the store directly
 		// to create multiple versions
 		tags := windowsARM64ToolsTags
@@ -431,7 +427,7 @@ func (s *GARMToolsTestSuite) TestListAllGARMToolsMultiplePlatforms() {
 			OSArch:      p.osArch,
 			Version:     "v1.0.0",
 		}
-		reader := bytes.NewReader([]byte(fmt.Sprintf("%s %s binary", p.osType, p.osArch)))
+		reader := bytes.NewReader(fmt.Appendf(nil, "%s %s binary", p.osType, p.osArch))
 		_, err := s.Runner.CreateGARMTool(s.AdminContext, param, reader)
 		s.Require().NoError(err)
 	}
@@ -467,7 +463,7 @@ func TestGARMToolsTestSuite(t *testing.T) {
 }
 
 func (s *GARMToolsTestSuite) TestListGARMAgentReleases() {
-	_, err := s.Store.InitController()
+	_, err := s.Store.InitController(s.AdminContext)
 	s.Require().NoError(err)
 
 	index := garmUtil.AgentReleaseIndex{
@@ -492,10 +488,10 @@ func (s *GARMToolsTestSuite) TestListGARMAgentReleases() {
 	}
 	data, err := garmUtil.MarshalReleaseIndex(index)
 	s.Require().NoError(err)
-	s.Require().NoError(s.Store.UpdateCachedGARMAgentReleases(data, time.Now()))
+	s.Require().NoError(s.Store.UpdateCachedGARMAgentReleases(s.AdminContext, data, time.Now()))
 
 	version := "v0.1.0"
-	_, err = s.Store.UpdateController(params.UpdateControllerParams{GARMAgentVersion: &version})
+	_, err = s.Store.UpdateController(s.AdminContext, params.UpdateControllerParams{GARMAgentVersion: &version})
 	s.Require().NoError(err)
 
 	releases, err := s.Runner.ListGARMAgentReleases(s.AdminContext)
@@ -520,4 +516,42 @@ func (s *GARMToolsTestSuite) TestListGARMAgentReleases() {
 	// Non-admin contexts are rejected.
 	_, err = s.Runner.ListGARMAgentReleases(s.UnauthorizedContext)
 	s.Require().ErrorIs(err, runnerErrors.ErrUnauthorized)
+}
+
+// Every architecture GARM can run a runner on must also be uploadable as a
+// garm-agent binary, both for manual uploads and for when the garm-agent
+// releases start publishing them.
+func (s *GARMToolsTestSuite) TestCreateGARMToolAcceptsEverySupportedArch() {
+	for _, osArch := range []commonParams.OSArch{
+		commonParams.Amd64,
+		commonParams.Arm64,
+		commonParams.Arm,
+		commonParams.Ppc64le,
+		commonParams.S390x,
+		commonParams.Riscv64,
+	} {
+		param := params.CreateGARMToolParams{
+			Name:        "garm-agent-linux-" + string(osArch),
+			Description: "agent for linux/" + string(osArch),
+			Size:        1024,
+			OSType:      commonParams.Linux,
+			OSArch:      osArch,
+			Version:     "v1.0.0",
+		}
+
+		tool, err := s.Runner.CreateGARMTool(s.AdminContext, param, bytes.NewReader([]byte("test binary content")))
+		s.Require().NoError(err, string(osArch))
+		s.Require().Contains(tool.Tags, garmAgentOSArchTag(osArch), string(osArch))
+
+		// And it can be found and removed under the same arch.
+		s.Require().NoError(s.Runner.DeleteGarmTool(s.AdminContext, string(commonParams.Linux), string(osArch)), string(osArch))
+	}
+}
+
+// An architecture GARM does not support is still refused, so a typo does not
+// quietly create a tool nothing will ever match.
+func (s *GARMToolsTestSuite) TestDeleteGarmToolRejectsUnsupportedArch() {
+	err := s.Runner.DeleteGarmTool(s.AdminContext, "linux", "sparc64")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "invalid os_arch")
 }

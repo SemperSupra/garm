@@ -44,9 +44,12 @@ type GarmSuite struct {
 	suite.Suite
 	cli             *client.GarmAPI
 	authToken       runtime.ClientAuthInfoWriter
+	baseURL         string
+	apiToken        string
 	ghToken         string
 	credentialsName string
 	repo            *params.Repository
+	events          *eventConsumer
 }
 
 func (suite *GarmSuite) SetupSuite() {
@@ -89,10 +92,19 @@ func (suite *GarmSuite) SetupSuite() {
 	token, err := login(suite.cli, loginParams)
 	suite.Require().NoError(err, "error at login")
 	suite.authToken = openapiRuntimeClient.BearerToken(token)
+	suite.baseURL = baseURL
+	suite.apiToken = token
 	t.Log("Log in successful")
 
 	err = setControllerURLs(suite.cli, suite.authToken, baseURL)
 	suite.Require().NoError(err, "error setting controller URLs")
+
+	// The event consumer listens for database change events for the entire
+	// lifetime of the test suite. Tests wait for conditions over the
+	// consumed events instead of polling the API. It can only connect once
+	// the controller URLs are set: until then, the API (including the
+	// events websocket endpoint) refuses requests with a 409.
+	suite.events = suite.startEventConsumer()
 
 	suite.credentialsName = os.Getenv("CREDENTIALS_NAME")
 	suite.EnsureTestCredentials(suite.credentialsName, suite.ghToken, "github.com")
@@ -117,6 +129,9 @@ func (suite *GarmSuite) SetupSuite() {
 func (suite *GarmSuite) TearDownSuite() {
 	t := suite.T()
 	t.Log("Graceful cleanup")
+	if suite.events != nil {
+		defer suite.events.Stop()
+	}
 	// disable all pools and set min_idle_runners to 0 to prevent
 	// the pool manager from creating new instances during cleanup.
 	pools, err := listPools(suite.cli, suite.authToken)

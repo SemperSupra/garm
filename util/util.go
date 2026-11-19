@@ -23,6 +23,7 @@ import (
 	"os"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/h2non/filetype"
 
 	"github.com/cloudbase/garm-provider-common/cloudconfig"
@@ -31,6 +32,20 @@ import (
 	"github.com/cloudbase/garm/internal/templates"
 	"github.com/cloudbase/garm/runner/common"
 )
+
+// scaleSetPoolIDNamespace is the UUIDv5 namespace used to derive pseudo pool
+// IDs for scale sets. Instances in providers are tagged with IDs derived from
+// this namespace; changing it (or the derivation input format) orphans every
+// instance created with the previous value.
+var scaleSetPoolIDNamespace = uuid.MustParse("3f5bfba0-d82c-4f91-a5f6-ddc1c9209b01")
+
+// ScaleSetPseudoPoolID derives a stable, UUID-shaped pseudo pool ID for a
+// scale set, from the forge entity ID and the internal scale set database ID.
+// Both inputs are immutable, so the result never changes for the lifetime of
+// the scale set and always fits within provider tag/label length limits.
+func ScaleSetPseudoPoolID(entityID string, scaleSetID uint) string {
+	return uuid.NewSHA1(scaleSetPoolIDNamespace, fmt.Appendf(nil, "%s-%d", entityID, scaleSetID)).String()
+}
 
 func FetchTools(ctx context.Context, cli common.GithubClient) ([]commonParams.RunnerApplicationDownload, error) {
 	tools, ghResp, err := cli.ListEntityRunnerApplicationDownloads(ctx)
@@ -49,6 +64,36 @@ func FetchTools(ctx context.Context, cli common.GithubClient) ([]commonParams.Ru
 		ret = append(ret, commonParams.RunnerApplicationDownload(*tool))
 	}
 	return ret, nil
+}
+
+// MergeTools merges two sets of runner tools on their OS/arch combo. An entry
+// in override replaces the base entry for the same combo, and combos only
+// override knows about are kept.
+//
+// It lets the tools metadata URL configured on an endpoint take precedence
+// over what the forge API reports, while keeping the combos only the forge
+// publishes. Within either set, the first entry for a combo wins.
+//
+// Note: This does not check versions of tools from the override URL. If the
+// 3td party tools URL serves outdated tools, GARM does not check. Runners using
+// tools that are too old, may not be able to connect to GitHub.
+func MergeTools(base, override []commonParams.RunnerApplicationDownload) []commonParams.RunnerApplicationDownload {
+	ret := make([]commonParams.RunnerApplicationDownload, 0, len(base)+len(override))
+	seen := make(map[string]struct{}, len(base)+len(override))
+
+	// The override goes first, so every combo it covers is taken before the
+	// base is considered. The base then only fills in what is left.
+	for _, tools := range [][]commonParams.RunnerApplicationDownload{override, base} {
+		for _, tool := range tools {
+			key := tool.Platform()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			ret = append(ret, tool)
+		}
+	}
+	return ret
 }
 
 func ASCIIEqualFold(s, t string) bool {

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/cloudbase/garm/database/watcher"
 	garmErrors "github.com/cloudbase/garm/internal/errors"
 	"github.com/cloudbase/garm/locking"
+	"github.com/cloudbase/garm/metrics"
 	"github.com/cloudbase/garm/params"
 	"github.com/cloudbase/garm/runner/common"
 	garmUtil "github.com/cloudbase/garm/util"
@@ -38,7 +40,7 @@ import (
 
 func NewWorker(ctx context.Context, store dbCommon.Store, scaleSet params.ScaleSet, provider common.Provider) (*Worker, error) {
 	consumerID := fmt.Sprintf("scaleset-worker-%s-%d", scaleSet.Name, scaleSet.ID)
-	controllerInfo, err := store.ControllerInfo()
+	controllerInfo, err := store.ControllerInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("getting controller info: %w", err)
 	}
@@ -63,6 +65,7 @@ func NewWorker(ctx context.Context, store dbCommon.Store, scaleSet params.ScaleS
 		scaleSet:       scaleSet,
 		entity:         entity,
 		runners:        make(map[string]params.Instance),
+		pseudoPoolID:   garmUtil.ScaleSetPseudoPoolID(scalesetEntity.ID, scaleSet.ID),
 	}, nil
 }
 
@@ -76,6 +79,14 @@ type Worker struct {
 	scaleSet params.ScaleSet
 	entity   params.ForgeEntity
 	runners  map[string]params.Instance
+
+	// pseudoPoolID is the stable pool ID reported to providers for this scale
+	// set. It is derived from immutable IDs, so it is computed once.
+	pseudoPoolID string
+	// legacyPoolIDDrained indicates that the provider no longer has any
+	// instances tagged with the legacy name-based pseudo pool ID, so we can
+	// stop querying for it.
+	legacyPoolIDDrained bool
 
 	consumer dbCommon.Consumer
 
@@ -91,6 +102,20 @@ type Worker struct {
 	mux     sync.Mutex
 	running bool
 	quit    chan struct{}
+
+	// authFailed marks that the forge rejected our credentials. While set,
+	// the listener is not restarted and scaling is paused, instead of
+	// hammering the forge with calls that cannot succeed. The flag clears
+	// when the entity worker installs a fresh client after a credentials
+	// update, and is retried periodically as a safety valve. This is kept
+	// separate from rate limiting: a quota reset must not resume a worker
+	// whose credentials are still rejected.
+	authFailed    bool
+	authFailedCli common.GithubClient
+	authFailureAt time.Time
+	// scalingPauseReason tracks why scaling is paused, so pause/resume
+	// transitions are logged once instead of on every autoscale tick.
+	scalingPauseReason string
 }
 
 func (w *Worker) ensureScaleSetInGitHub() error {
@@ -202,6 +227,10 @@ func (w *Worker) Stop() error {
 		close(w.quit)
 	}
 	w.listener.Stop()
+	// Drop the freshness gauge so a stopped (possibly deleted) scale set
+	// does not linger as a stale timestamp and trip staleness alerts. It is
+	// re-set on the next successful poll if the worker comes back.
+	metrics.ScaleSetListenerLastSuccess.DeleteLabelValues(strconv.FormatUint(uint64(w.scaleSet.ID), 10))
 	return nil
 }
 
@@ -251,9 +280,10 @@ func (w *Worker) Start() (err error) {
 					// before we create the actual instance that will use the credentials. We need
 					// to remove the runner from github if it exists.
 					if !errors.Is(err, runnerErrors.ErrNotFound) {
-						if errors.Is(err, runnerErrors.ErrUnauthorized) {
-							// we don't have access to remove the runner. This implies that our
-							// credentials may have expired or ar incorrect.
+						if errors.Is(err, runnerErrors.ErrUnauthorized) || errors.Is(err, runnerErrors.ErrForbidden) {
+							// A 401 means bad credentials, a 403 is usually a secondary
+							// rate limit. Neither says anything about the runner, so keep
+							// it and retry on a later pass.
 							//
 							// nolint:golangci-lint,godox
 							// TODO(gabriel-samfira): we need to set the scale set as inactive and stop the listener (if any).
@@ -302,6 +332,9 @@ func (w *Worker) Start() (err error) {
 					locking.Unlock(instance.Name, false)
 					return fmt.Errorf("updating runner %s: %w", instance.Name, err)
 				}
+			}
+			if instanceState == commonParams.InstancePendingDelete {
+				w.recordLifecycleEvent(metrics.OutcomeStartupRecovery)
 			}
 		case commonParams.InstanceDeleting:
 			// Set the instance in deleting. It is assumed that the runner was already
@@ -451,6 +484,40 @@ func (w *Worker) recordMaterializationFailure(runner params.Instance, reason str
 		"reason", reason)
 }
 
+// providerBaseParams returns the base provider parameters for operations on
+// this scale set's runners, identifying the owning entity and scale set.
+func (w *Worker) providerBaseParams() common.ProviderBaseParams {
+	base := common.ProviderBaseParams{
+		ControllerInfo: w.controllerInfo,
+		ScaleSetID:     w.scaleSet.ID,
+	}
+	if entity, err := w.scaleSet.GetEntity(); err == nil {
+		base.EntityType = entity.EntityType
+		base.EntityID = entity.ID
+	}
+	return base
+}
+
+// recordLifecycleEvent counts a runner removal decision made for this scale
+// set, by outcome. The entity String() form is used for the owner label; a
+// bare repo name would be ambiguous across owners.
+func (w *Worker) recordLifecycleEvent(outcome string) {
+	var owner string
+	if entity, err := w.scaleSet.GetEntity(); err == nil {
+		if cachedEntity, ok := cache.GetEntity(entity.ID); ok {
+			owner = cachedEntity.String()
+		}
+	}
+	metrics.RunnerLifecycleCount.WithLabelValues(
+		outcome,                           // label: outcome
+		w.scaleSet.ProviderName,           // label: provider
+		owner,                             // label: pool_owner
+		string(w.scaleSet.ScaleSetType()), // label: pool_type
+		"",                                // label: pool_id
+		strconv.FormatUint(uint64(w.scaleSet.ID), 10), // label: scaleset_id
+	).Inc()
+}
+
 func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) (func(), error) {
 	lockNames := []string{}
 
@@ -506,6 +573,7 @@ func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) 
 				continue
 			}
 			w.recordMaterializationFailure(runner, "runner timed out or failed before job start")
+			w.recordLifecycleEvent(metrics.OutcomeBootstrapTimeout)
 			lockNames = append(lockNames, runner.Name)
 		}
 	}
@@ -631,6 +699,7 @@ func (w *Worker) consolidateRunnerState(listedAt time.Time, runners []params.Run
 			// hold the lock, so no race condition can occur.
 			w.runners[runner.ID] = instance
 			w.recordMaterializationFailure(runner, "runner disappeared from GitHub before job start")
+			w.recordLifecycleEvent(metrics.OutcomeOrphaned)
 		}
 	}
 
@@ -642,19 +711,13 @@ func (w *Worker) consolidateRunnerState(listedAt time.Time, runners []params.Run
 // DB runners with no provider instance are marked as pending_delete. Must be
 // called with w.mux held.
 func (w *Worker) consolidateProviderState() error {
-	pseudoPoolID, err := w.pseudoPoolID()
-	if err != nil {
-		return fmt.Errorf("getting pseudo pool ID: %w", err)
-	}
 	listParams := common.ListInstancesParams{
 		ListInstancesV011: common.ListInstancesV011Params{
-			ProviderBaseParams: common.ProviderBaseParams{
-				ControllerInfo: w.controllerInfo,
-			},
+			ProviderBaseParams: w.providerBaseParams(),
 		},
 	}
 
-	providerRunners, err := w.provider.ListInstances(w.ctx, pseudoPoolID, listParams)
+	providerRunners, err := w.provider.ListInstances(w.ctx, w.pseudoPoolID, listParams)
 	if err != nil {
 		return fmt.Errorf("listing instances: %w", err)
 	}
@@ -664,11 +727,36 @@ func (w *Worker) consolidateProviderState() error {
 		providerRunnersByName[runner.Name] = runner
 	}
 
+	if !w.legacyPoolIDDrained {
+		legacyID, err := w.legacyPseudoPoolID()
+		if err != nil {
+			return fmt.Errorf("getting legacy pseudo pool ID: %w", err)
+		}
+		legacyRunners, err := w.provider.ListInstances(w.ctx, legacyID, listParams)
+		if err != nil {
+			// it seems that some providers (like k8s) err out even during a list
+			// operation. If we got here, the ListInstances() call using the new
+			// ID, worked. So we just ignore the error, set w.legacyPoolIDDrained = true
+			// and hope for the best.
+			slog.WarnContext(w.ctx, "failed to list instances using legacy ID; ignoring", "error", err)
+			w.legacyPoolIDDrained = true
+		} else {
+			if len(legacyRunners) == 0 {
+				w.legacyPoolIDDrained = true
+			}
+			for _, runner := range legacyRunners {
+				if _, ok := providerRunnersByName[runner.Name]; ok {
+					continue
+				}
+				providerRunnersByName[runner.Name] = runner
+				providerRunners = append(providerRunners, runner)
+			}
+		}
+	}
+
 	deleteInstanceParams := common.DeleteInstanceParams{
 		DeleteInstanceV011: common.DeleteInstanceV011Params{
-			ProviderBaseParams: common.ProviderBaseParams{
-				ControllerInfo: w.controllerInfo,
-			},
+			ProviderBaseParams: w.providerBaseParams(),
 		},
 	}
 
@@ -729,6 +817,7 @@ func (w *Worker) consolidateProviderState() error {
 				continue
 			}
 			w.recordMaterializationFailure(runner, "runner disappeared from provider before job start")
+			w.recordLifecycleEvent(metrics.OutcomeOrphaned)
 		}
 		locking.Unlock(runner.Name, false)
 	}
@@ -758,8 +847,16 @@ func (w *Worker) providerAbsenceConfirmed(runner params.Instance, baseParams com
 	}
 }
 
-func (w *Worker) pseudoPoolID() (string, error) {
-	// This is temporary. We need to extend providers to know about scale sets.
+// legacyPseudoPoolID returns the deprecated name-based pseudo pool ID. Older
+// GARM versions tagged provider instances with this ID, so we keep listing by
+// it until no instances tagged with it remain. It must be recomputed on every
+// call, because the scale set name can change (which is bad and have failed to
+// consider this until now).
+//
+// Deprecated: This function is "born" deprecated because it transitions from
+// the old way to tag instances, to the new stable uuid V5 computed from the
+// entity ID and the internal scaleset ID.
+func (w *Worker) legacyPseudoPoolID() (string, error) {
 	entity, err := w.scaleSet.GetEntity()
 	if err != nil {
 		return "", fmt.Errorf("getting entity: %w", err)
@@ -922,10 +1019,108 @@ func (w *Worker) sleepWithCancel(sleepTime time.Duration) (canceled bool) {
 	return true
 }
 
+// forgeAuthRetryInterval is how often we probe the forge again while the
+// auth failure flag is set, in case access was restored out of band (for
+// example an app installation that was unsuspended, or a PAT authorized
+// for an org enforcing SAML SSO) without a credentials update in GARM.
+const forgeAuthRetryInterval = 5 * time.Minute
+
+// markAuthFailure sets the auth failure state after a forge call was
+// rejected as unauthorized. Callers must not hold w.mux.
+func (w *Worker) markAuthFailure() {
+	// A 403 maps to ErrForbidden, so only a genuine 401 lands here. The
+	// rate limit check stays as a safety net. A refusal while the quota is
+	// exhausted says nothing about the credentials.
+	if limited, _ := cache.EntityRateLimitExhausted(w.entity.ID); limited {
+		slog.WarnContext(w.ctx, "forge call rejected while rate limit is exhausted; treating as rate limited")
+		return
+	}
+	cli, ok := cache.GetGithubClient(w.entity.ID)
+	if !ok {
+		cli = nil
+	}
+	w.mux.Lock()
+	w.authFailed = true
+	w.authFailedCli = cli
+	w.authFailureAt = time.Now()
+	w.mux.Unlock()
+	slog.WarnContext(w.ctx, "forge rejected our credentials; pausing scale set forge operations until credentials are updated")
+}
+
+func (w *Worker) clearAuthFailureLocked() {
+	if w.authFailed {
+		slog.InfoContext(w.ctx, "forge credentials accepted again; resuming scale set forge operations")
+	}
+	w.authFailed = false
+	w.authFailedCli = nil
+}
+
+func (w *Worker) clearAuthFailure() {
+	w.mux.Lock()
+	defer w.mux.Unlock()
+	w.clearAuthFailureLocked()
+}
+
+// forgeAuthBlockedLocked reports whether forge operations should stay paused
+// due to a previous auth failure. Callers must hold w.mux.
+func (w *Worker) forgeAuthBlockedLocked() bool {
+	if !w.authFailed {
+		return false
+	}
+	// A credentials update makes the entity worker install a fresh client in
+	// the cache. Give the new client a chance immediately.
+	if cli, ok := cache.GetGithubClient(w.entity.ID); ok && cli != w.authFailedCli {
+		w.clearAuthFailureLocked()
+		return false
+	}
+	// Safety valve: probe again periodically even without a credentials
+	// change. On failure the flag is simply set again with a fresh timestamp.
+	if time.Since(w.authFailureAt) >= forgeAuthRetryInterval {
+		return false
+	}
+	return true
+}
+
+// scalingPausedLocked reports whether scaling in either direction should
+// pause. Scaling talks to the forge (JIT config generation on the way up,
+// runner removal on the way down), so it pauses while the credentials are
+// rejected or while the remaining quota has dipped into the configured
+// reserve. The two conditions are independent: a rate limit reset does not
+// resume a worker whose credentials are still rejected, and vice versa.
+// Pause and resume transitions are logged once. Callers must hold w.mux.
+func (w *Worker) scalingPausedLocked() bool {
+	var reason string
+	if w.forgeAuthBlockedLocked() {
+		reason = "forge rejected our credentials"
+	} else if limited, resetAt := cache.EntityRateLimitReached(w.entity.ID); limited {
+		reason = fmt.Sprintf("rate limit reached; quota resets at %s", resetAt.UTC().Format(time.RFC3339))
+	}
+	if reason != w.scalingPauseReason {
+		if reason == "" {
+			slog.InfoContext(w.ctx, "resuming scale set scaling")
+		} else {
+			slog.InfoContext(w.ctx, "pausing scale set scaling", "reason", reason)
+		}
+		w.scalingPauseReason = reason
+	}
+	return reason != ""
+}
+
 func (w *Worker) sessionLoopMayRun() bool {
 	w.mux.Lock()
 	defer w.mux.Unlock()
-	return w.scaleSet.Enabled
+	if !w.scaleSet.Enabled || w.forgeAuthBlockedLocked() {
+		return false
+	}
+	// While the quota is fully exhausted, session (re)creation cannot
+	// succeed either: it needs a runner registration token, which is the
+	// one REST call in the message pipeline. Everything downstream (the
+	// broker long poll, session refresh against the actions service) uses
+	// session or admin tokens and does not consume the REST quota, so an
+	// established listener keeps running and only session (re)creation is
+	// held back. It resumes on its own once the quota resets.
+	limited, _ := cache.EntityRateLimitExhausted(w.entity.ID)
+	return !limited
 }
 
 func (w *Worker) keepListenerAlive() {
@@ -942,6 +1137,11 @@ Loop:
 		// noop if already started.
 		if err := w.listener.Start(); err != nil {
 			slog.ErrorContext(w.ctx, "error starting listener", "error", err, "consumer_id", w.consumerID)
+			if errors.Is(err, runnerErrors.ErrUnauthorized) {
+				// sessionLoopMayRun() keeps us parked until credentials are
+				// updated or the retry interval elapses.
+				w.markAuthFailure()
+			}
 			if canceled := w.sleepWithCancel(2 * time.Second); canceled {
 				slog.InfoContext(w.ctx, "worker is stopped; exiting keepListenerAlive")
 				return
@@ -949,6 +1149,7 @@ Loop:
 			// we failed to start the listener. Try again.
 			continue
 		}
+		w.clearAuthFailure()
 
 		select {
 		case <-w.quit:
@@ -965,18 +1166,26 @@ Loop:
 				w.mux.Unlock()
 				continue Loop
 			}
+			metrics.ScaleSetListenerRestartsCount.WithLabelValues(
+				strconv.FormatUint(uint64(w.scaleSet.ID), 10), // label: id
+			).Inc()
 			w.mux.Unlock()
 			for {
 				w.mux.Lock()
-				// In case the scaleset was disabled while we were in the
-				// backoff sleep.
-				if !w.scaleSet.Enabled {
+				// In case the scaleset was disabled or the credentials were
+				// rejected while we were in the backoff sleep. The outer loop
+				// parks until the condition clears.
+				if !w.scaleSet.Enabled || w.forgeAuthBlockedLocked() {
 					w.mux.Unlock()
 					continue Loop
 				}
 				slog.DebugContext(w.ctx, "attempting to restart")
 				if err := w.listener.Start(); err != nil {
 					w.mux.Unlock()
+					if errors.Is(err, runnerErrors.ErrUnauthorized) {
+						w.markAuthFailure()
+						continue Loop
+					}
 					switch backoff {
 					case 0:
 						backoff = 5 * time.Second
@@ -992,6 +1201,7 @@ Loop:
 					continue
 				}
 				backoff = 0
+				w.clearAuthFailureLocked()
 				w.mux.Unlock()
 				continue Loop
 			}
@@ -1026,13 +1236,15 @@ func (w *Worker) handleScaleUp() {
 		return
 	}
 
-	runnersToAdd := w.runnersToAdd()
-	if runnersToAdd == 0 {
-		slog.DebugContext(w.ctx, "target is less than or equal to current; not scaling up")
+	// Create what the target is missing in usable runners, without letting
+	// the total (including runners still being deleted) pass MaxRunners.
+	toCreate := min(w.targetRunners()-w.usableRunnerCount(), int(w.scaleSet.MaxRunners)-w.runnerCount())
+	if toCreate <= 0 {
+		slog.DebugContext(w.ctx, "target is reached or the scale set is at max runners; not scaling up")
 		return
 	}
 
-	controllerConfig, err := w.store.ControllerInfo()
+	controllerConfig, err := w.store.ControllerInfo(w.ctx)
 	if err != nil {
 		slog.ErrorContext(w.ctx, "error getting controller config", "error", err)
 		return
@@ -1043,7 +1255,7 @@ func (w *Worker) handleScaleUp() {
 		slog.ErrorContext(w.ctx, "error getting scale set client", "error", err)
 		return
 	}
-	for range runnersToAdd {
+	for i := 0; i < toCreate; i++ {
 		newRunnerName := strings.ToLower(fmt.Sprintf("%s-%s", w.scaleSet.GetRunnerPrefix(), util.NewID()))
 		jitConfig, err := scaleSetCli.GenerateJitRunnerConfig(w.ctx, newRunnerName, w.scaleSet.ScaleSetID)
 		if err != nil {
@@ -1104,7 +1316,9 @@ func (w *Worker) waitForToolsOrCancel() (hasTools, stopped bool) {
 }
 
 func (w *Worker) handleScaleDown() {
-	delta := w.runnerCount() - w.targetRunners()
+	// Runners already on their way out are not part of usableRunnerCount(),
+	// so the delta is exactly the number of idle runners to remove.
+	delta := w.usableRunnerCount() - w.targetRunners()
 	if delta <= 0 {
 		return
 	}
@@ -1181,10 +1395,16 @@ func (w *Worker) handleScaleDown() {
 				continue
 			}
 			w.runners[runner.ID] = updatedRunner
+			w.recordLifecycleEvent(metrics.OutcomeIdleScaleDown)
 			locking.Unlock(runner.Name, false)
 			removed++
 		case commonParams.InstancePendingDelete, commonParams.InstancePendingForceDelete,
-			commonParams.InstanceDeleting, commonParams.InstanceDeleted:
+			commonParams.InstanceDeleting:
+			// Not part of the delta: usableRunnerCount() excludes them.
+			continue
+		case commonParams.InstanceDeleted:
+			// Provider resource is gone and the record is excluded from
+			// runnerCount(); it is not part of the delta.
 			continue
 		default:
 			slog.WarnContext(w.ctx, "runner is not in a valid state; skipping", "runner_name", runner.Name, "runner_status", runner.Status)
@@ -1203,13 +1423,15 @@ func (w *Worker) targetRunners() int {
 	return int(targetRunners)
 }
 
-// runnerCount excludes runners that are being deleted from usable capacity.
+// runnerCount returns the number of runners that still occupy capacity in
+// the provider. Runners on their way out (pending_delete, deleting) are
+// still physically present in the IaaS, so they count; only runners whose
+// provider resource is confirmed gone (deleted) are excluded — those records
+// merely await database cleanup.
 func (w *Worker) runnerCount() int {
 	count := 0
 	for _, runner := range w.runners {
-		switch runner.Status {
-		case commonParams.InstancePendingDelete, commonParams.InstancePendingForceDelete,
-			commonParams.InstanceDeleting, commonParams.InstanceDeleted:
+		if runner.Status == commonParams.InstanceDeleted {
 			continue
 		}
 		count++
@@ -1217,27 +1439,34 @@ func (w *Worker) runnerCount() int {
 	return count
 }
 
-func (w *Worker) providerSlotsInUse() uint {
-	var count uint
+// usableRunnerCount returns the number of runners that are running a job,
+// are waiting for one, or will be once they finish booting. Runners on
+// their way out (pending_delete, pending_force_delete, deleting, deleted),
+// runners in error and runners whose job has ended (terminated, failed)
+// still occupy provider capacity for a while, but they will never take
+// another job. Scaling decisions compare this number with the target;
+// runnerCount() only bounds the total against MaxRunners.
+//
+// Comparing the target with runnerCount() instead starves the pool on
+// providers where deletion is slow: with ephemeral runners and a steady
+// stream of jobs, the runners being deleted alone can exceed
+// MinIdleRunners + DesiredRunnerCount, so no replacement is created and
+// idle runners are removed to "make room".
+func (w *Worker) usableRunnerCount() int {
+	count := 0
 	for _, runner := range w.runners {
-		if runner.Status != commonParams.InstanceDeleted {
-			count++
+		switch runner.Status {
+		case commonParams.InstancePendingDelete, commonParams.InstancePendingForceDelete,
+			commonParams.InstanceDeleting, commonParams.InstanceDeleted, commonParams.InstanceError:
+			continue
 		}
+		switch runner.RunnerStatus {
+		case params.RunnerTerminated, params.RunnerFailed:
+			continue
+		}
+		count++
 	}
 	return count
-}
-
-func (w *Worker) runnersToAdd() int {
-	runnerDeficit := max(w.targetRunners()-w.runnerCount(), 0)
-	providerSlots := w.providerSlotsInUse()
-	if providerSlots >= w.scaleSet.MaxRunners {
-		return 0
-	}
-	availableSlots := w.scaleSet.MaxRunners - providerSlots
-	if availableSlots < uint(runnerDeficit) {
-		return int(availableSlots)
-	}
-	return runnerDeficit
 }
 
 func (w *Worker) handleAutoScale() {
@@ -1280,17 +1509,26 @@ func (w *Worker) handleAutoScale() {
 				continue
 			}
 
-			if w.runnerCount() == w.targetRunners() {
-				lastMsgDebugLog("desired runner count reached", w.targetRunners(), w.runnerCount())
+			// Instance cleanup above is database-only and always runs; the
+			// scaling decisions below talk to the forge and pause while rate
+			// limited or while our credentials are rejected.
+			if w.scalingPausedLocked() {
 				w.mux.Unlock()
 				continue
 			}
 
-			if w.runnerCount() < w.targetRunners() {
-				lastMsgDebugLog("scaling up", w.targetRunners(), w.runnerCount())
+			usable, target := w.usableRunnerCount(), w.targetRunners()
+			if usable == target {
+				lastMsgDebugLog("desired runner count reached", target, usable)
+				w.mux.Unlock()
+				continue
+			}
+
+			if usable < target {
+				lastMsgDebugLog("scaling up", target, usable)
 				w.handleScaleUp()
 			} else {
-				lastMsgDebugLog("attempting to scale down", w.targetRunners(), w.runnerCount())
+				lastMsgDebugLog("attempting to scale down", target, usable)
 				w.handleScaleDown()
 			}
 			w.mux.Unlock()

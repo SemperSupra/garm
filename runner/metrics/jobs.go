@@ -34,10 +34,13 @@ func CollectJobMetric(ctx context.Context, r *runner.Runner) error {
 	}
 
 	for _, job := range jobs {
+		poolID := ""
+		if job.PoolID != nil {
+			poolID = job.PoolID.String()
+		}
 		metrics.JobStatus.WithLabelValues(
 			fmt.Sprintf("%d", job.ID),            // label: job_id
 			fmt.Sprintf("%d", job.WorkflowJobID), // label: workflow_job_id
-			job.ScaleSetJobID,                    // label: scaleset_job_id
 			fmt.Sprintf("%d", job.RunID),         // label: workflow_run_id
 			job.Name,                             // label: name
 			job.Status,                           // label: status
@@ -46,6 +49,39 @@ func CollectJobMetric(ctx context.Context, r *runner.Runner) error {
 			job.RepositoryOwner,                  // label: owner
 			job.RepositoryName,                   // label: repository
 			strings.Join(job.Labels, " "),        // label: requested_labels
+			poolID,                               // label: pool_id
+		).Set(1)
+	}
+	return nil
+}
+
+// CollectScaleSetJobMetric collects the metrics for jobs GitHub routed to
+// scale sets.
+func CollectScaleSetJobMetric(ctx context.Context, r *runner.Runner) error {
+	metrics.ScaleSetJobStatus.Reset()
+
+	jobs, err := r.ListAllScaleSetJobs(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, job := range jobs {
+		scaleSetID := ""
+		if job.ScaleSetID != 0 {
+			scaleSetID = fmt.Sprintf("%d", job.ScaleSetID)
+		}
+		metrics.ScaleSetJobStatus.WithLabelValues(
+			job.ScaleSetJobID,                    // label: scaleset_job_id
+			scaleSetID,                           // label: scaleset_id
+			fmt.Sprintf("%d", job.WorkflowRunID), // label: workflow_run_id
+			job.Name,                             // label: name
+			job.Status,                           // label: status
+			job.Result,                           // label: result
+			job.RunnerName,                       // label: runner_name
+			job.RunnerGroupName,                  // label: runner_group
+			job.RepositoryOwner,                  // label: owner
+			job.RepositoryName,                   // label: repository
+			strings.Join(job.RequestLabels, " "), // label: requested_labels
 		).Set(1)
 	}
 	return nil

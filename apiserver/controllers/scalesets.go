@@ -112,6 +112,12 @@ func (a *APIController) GetScaleSetByIDHandler(w http.ResponseWriter, r *http.Re
 //	    in: path
 //	    required: true
 //
+//	  + name: bypassGHErrors
+//	    description: If true GARM removes the scale set even if GitHub fails to delete it, which may leave it orphaned on GitHub.
+//	    type: boolean
+//	    in: query
+//	    required: false
+//
 //	Responses:
 //	  default: APIErrorResponse
 func (a *APIController) DeleteScaleSetByIDHandler(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +143,8 @@ func (a *APIController) DeleteScaleSetByIDHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := a.r.DeleteScaleSetByID(ctx, uint(id)); err != nil {
+	bypassGHErrors, _ := strconv.ParseBool(r.URL.Query().Get("bypassGHErrors"))
+	if err := a.r.DeleteScaleSetByID(ctx, uint(id), bypassGHErrors); err != nil {
 		slog.With(slog.Any("error", err)).ErrorContext(ctx, "removing scale set")
 		handleError(ctx, w, err)
 		return
@@ -206,6 +213,148 @@ func (a *APIController) UpdateScaleSetByIDHandler(w http.ResponseWriter, r *http
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(scaleSet); err != nil {
+		slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to encode response")
+	}
+}
+
+// swagger:route GET /scalesets/jobs scalesets ListAllScaleSetJobs
+//
+// List jobs handled by all scale sets. Only queued and in progress jobs are
+// listed unless all is set.
+//
+//	Parameters:
+//	  + name: page
+//	    description: The page at which to list.
+//	    type: integer
+//	    in: query
+//	    required: false
+//	  + name: pageSize
+//	    description: Number of items per page.
+//	    type: integer
+//	    in: query
+//	    required: false
+//	  + name: all
+//	    description: Also list completed jobs.
+//	    type: boolean
+//	    in: query
+//	    required: false
+//	  + name: since
+//	    description: Only list jobs recorded at or after this timestamp.
+//	    type: string
+//	    format: date-time
+//	    in: query
+//	    required: false
+//	  + name: until
+//	    description: Only list jobs recorded at or before this timestamp.
+//	    type: string
+//	    format: date-time
+//	    in: query
+//	    required: false
+//
+//	Responses:
+//	  200: ScaleSetJobsPaginatedResponse
+//	  default: APIErrorResponse
+func (a *APIController) ListAllScaleSetJobsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	filter, err := parseListJobsFilter(r)
+	if err != nil {
+		handleError(ctx, w, err)
+		return
+	}
+
+	jobs, err := a.r.ListScaleSetJobs(ctx, 0, filter)
+	if err != nil {
+		slog.With(slog.Any("error", err)).ErrorContext(ctx, "listing scale set jobs")
+		handleError(ctx, w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(jobs); err != nil {
+		slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to encode response")
+	}
+}
+
+// swagger:route GET /scalesets/{scalesetID}/jobs scalesets ListScaleSetJobs
+//
+// List jobs handled by one scale set. Only queued and in progress jobs are
+// listed unless all is set.
+//
+//	Parameters:
+//	  + name: scalesetID
+//	    description: ID of the scale set whose jobs to fetch.
+//	    type: string
+//	    in: path
+//	    required: true
+//	  + name: page
+//	    description: The page at which to list.
+//	    type: integer
+//	    in: query
+//	    required: false
+//	  + name: pageSize
+//	    description: Number of items per page.
+//	    type: integer
+//	    in: query
+//	    required: false
+//	  + name: all
+//	    description: Also list completed jobs.
+//	    type: boolean
+//	    in: query
+//	    required: false
+//	  + name: since
+//	    description: Only list jobs recorded at or after this timestamp.
+//	    type: string
+//	    format: date-time
+//	    in: query
+//	    required: false
+//	  + name: until
+//	    description: Only list jobs recorded at or before this timestamp.
+//	    type: string
+//	    format: date-time
+//	    in: query
+//	    required: false
+//
+//	Responses:
+//	  200: ScaleSetJobsPaginatedResponse
+//	  default: APIErrorResponse
+func (a *APIController) ListScaleSetJobsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	vars := mux.Vars(r)
+	scaleSetID, ok := vars["scalesetID"]
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		if err := json.NewEncoder(w).Encode(params.APIErrorResponse{
+			Error:   "Bad Request",
+			Details: "No scale set ID specified",
+		}); err != nil {
+			slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to encode response")
+		}
+		return
+	}
+	id, err := strconv.ParseUint(scaleSetID, 10, 32)
+	if err != nil {
+		slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to parse id")
+		handleError(ctx, w, gErrors.ErrBadRequest)
+		return
+	}
+
+	filter, err := parseListJobsFilter(r)
+	if err != nil {
+		handleError(ctx, w, err)
+		return
+	}
+
+	jobs, err := a.r.ListScaleSetJobs(ctx, uint(id), filter)
+	if err != nil {
+		slog.With(slog.Any("error", err)).ErrorContext(ctx, "listing scale set jobs")
+		handleError(ctx, w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(jobs); err != nil {
 		slog.With(slog.Any("error", err)).ErrorContext(ctx, "failed to encode response")
 	}
 }
